@@ -1,5 +1,4 @@
 extern crate tch;
-
 use super::utils;
 
 use tch::{nn, Tensor};
