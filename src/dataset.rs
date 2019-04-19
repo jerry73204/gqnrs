@@ -1,17 +1,18 @@
 use std::io;
 use std::io::{Read, Seek};
 use std::error;
-use std::path::Path;
+use std::path;
 use std::fs;
+use std::collections;
 use serde::Deserialize;
 use glob::glob;
 use yaml_rust::YamlLoader;
 use byteorder::{ReadBytesExt, LittleEndian};
 use crc::crc32;
-use crc::Hasher32;
 use image::jpeg::JPEGDecoder;
 use image::ImageDecoder;
 use tch::Tensor;
+use rayon::prelude::*;
 use crate::tf_proto::example::Example;
 
 #[derive(Deserialize, Debug)]
@@ -24,7 +25,7 @@ pub struct GqnDataSetInfo
     sequence_size: u64,
 }
 
-pub fn load_gqn_tfrecord(name: &str, dataset_dir: &Path) -> Result<(), Box<error::Error>>
+pub fn load_gqn_tfrecord(name: &str, dataset_dir: &path::Path) -> Result<(), Box<error::Error>>
 {
     let dataset_spec = &YamlLoader::load_from_str(include_str!("dataset.yaml"))?[0];
     let dataset_info = &dataset_spec["dataset"][name];
@@ -37,13 +38,35 @@ pub fn load_gqn_tfrecord(name: &str, dataset_dir: &Path) -> Result<(), Box<error
     let train_dir = dataset_dir.join("train");
     let test_dir = dataset_dir.join("test");
 
+    let mut train_tfrecord_paths = Vec::<path::PathBuf>::new();
     for entry in glob(train_dir.join("*.tfrecord").to_str().unwrap())?
     {
-        let path = entry?;
-        let record_index = build_tfrecord_index(&path)?;
-        for (offset, len) in record_index
+        train_tfrecord_paths.push(entry?);
+    }
+
+    let mut test_tfrecord_paths = Vec::<path::PathBuf>::new();
+    for entry in glob(test_dir.join("*.tfrecord").to_str().unwrap())?
+    {
+        test_tfrecord_paths.push(entry?);
+    }
+
+    let train_tfrecord_indexes: collections::HashMap<_, _> = train_tfrecord_paths.par_iter().map(|path| {
+        println!("Loading {}", path.display());
+        let record_index = build_tfrecord_index(&path, false).unwrap();
+        (path, record_index)
+    }).collect();
+
+    let test_tfrecord_indexes: collections::HashMap<_, _> = test_tfrecord_paths.par_iter().map(|path| {
+        println!("Loading {}", path.display());
+        let record_index = build_tfrecord_index(&path, false).unwrap();
+        (path, record_index)
+    }).collect();
+
+    for (path, index) in train_tfrecord_indexes
+    {
+        for (offset, len) in index
         {
-            println!("{}, {}, {}", path.display(), offset, len);
+            println!("{} {} {}", path.display(), offset, len);
         }
     }
 
@@ -120,7 +143,7 @@ pub fn parse_example_record(
     Ok((frames_tensor, cameras_tensor))
 }
 
-pub fn build_tfrecord_index(path: &Path) -> Result<Vec<(u64, u64)>, Box<error::Error>>
+pub fn build_tfrecord_index(path: &path::Path, check_integrity: bool) -> Result<Vec<(u64, u64)>, Box<error::Error>>
 {
     let make_corrupted_error = || { io::Error::new(io::ErrorKind::Other, "corrupted error") };
     let make_truncated_error = || { io::Error::new(io::ErrorKind::UnexpectedEof, "corrupted error") };
@@ -140,15 +163,24 @@ pub fn build_tfrecord_index(path: &Path) -> Result<Vec<(u64, u64)>, Box<error::E
         {
             Ok(0) => Ok(None),
             Ok(n) if n == len_buf.len() => {
-                let answer_cksum = file.read_u32::<LittleEndian>()?;
-                if answer_cksum == checksum(&len_buf)
+                let len = (&len_buf[..]).read_u64::<LittleEndian>()?;
+
+                if check_integrity
                 {
-                    let len = (&len_buf[..]).read_u64::<LittleEndian>()?;
-                    Ok(Some(len))
+                    let answer_cksum = file.read_u32::<LittleEndian>()?;
+                    if answer_cksum == checksum(&len_buf)
+                    {
+                        Ok(Some(len))
+                    }
+                    else
+                    {
+                        Err(Box::new(make_corrupted_error()))
+                    }
                 }
                 else
                 {
-                    Err(Box::new(make_corrupted_error()))
+                    file.seek(io::SeekFrom::Current(4))?;
+                    Ok(Some(len))
                 }
             }
             Ok(_) => Err(Box::new(make_truncated_error())),
@@ -178,7 +210,14 @@ pub fn build_tfrecord_index(path: &Path) -> Result<Vec<(u64, u64)>, Box<error::E
             None => break,
             Some(len) => {
                 let offset = file.seek(io::SeekFrom::Current(0))?;
-                verify_record_integrity(&mut file, len)?;
+                if check_integrity
+                {
+                    verify_record_integrity(&mut file, len)?;
+                }
+                else
+                {
+                    file.seek(io::SeekFrom::Current(len as i64 + 4))?;
+                }
                 record_index.push((offset, len));
             }
         }

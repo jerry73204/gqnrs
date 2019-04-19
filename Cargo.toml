@@ -19,3 +19,4 @@ crc = "1.8.1"
 ndarray = { version = "0.12.1", features = ["blas"] }
 blas-src = { version = "0.2.0", default-features = false, features = ["openblas"] }
 openblas-src = { version = "0.6.0", default-features = false, features = ["cblas", "system"] }
+rayon = "1.0"

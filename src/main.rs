@@ -8,6 +8,7 @@ extern crate clap;
 extern crate tch;
 extern crate yaml_rust;
 extern crate glob;
+extern crate rayon;
 
 mod representation;
 mod utils;
