@@ -1,5 +1,3 @@
-
-use std::borrow::Borrow;
 use tch::{nn, Device, Tensor, Kind};
 
 pub struct GqnLSTMState((Tensor, Tensor));

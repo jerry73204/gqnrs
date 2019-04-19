@@ -1,6 +1,13 @@
+extern crate byteorder;
+extern crate serde;
+extern crate image;
+extern crate telamon_utils;
+extern crate protobuf;
+extern crate crc;
 extern crate clap;
 extern crate tch;
 extern crate yaml_rust;
+extern crate glob;
 
 mod representation;
 mod utils;
