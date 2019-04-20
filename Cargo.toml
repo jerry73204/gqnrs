@@ -8,8 +8,8 @@ edition = "2018"
 clap = {version = "~2.27.0", features = ["yaml"]}
 tch = "0.0.8"
 yaml-rust = "0.3.5"
-serde_json = "1.0"
 serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
 image = "0.18.0"
 glob = "0.3.0"
 telamon-utils = { git = "https://github.com/ulysseB/telamon.git" }
@@ -20,3 +20,4 @@ ndarray = { version = "0.12.1", features = ["blas"] }
 blas-src = { version = "0.2.0", default-features = false, features = ["openblas"] }
 openblas-src = { version = "0.6.0", default-features = false, features = ["cblas", "system"] }
 rayon = "1.0"
+log = "0.4"

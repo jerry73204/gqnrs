@@ -123,3 +123,7 @@ impl GqnLSTM
         (hy.copy(), GqnLSTMState((hy, cy)))
     }
 }
+
+pub struct GeneratorLSTM
+{
+}

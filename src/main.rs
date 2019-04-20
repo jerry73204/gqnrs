@@ -9,7 +9,9 @@ extern crate tch;
 extern crate yaml_rust;
 extern crate glob;
 extern crate rayon;
+#[macro_use] extern crate log;
 
+mod decoder;
 mod representation;
 mod utils;
 mod dataset;
@@ -51,7 +53,7 @@ args:
     let input_dir = Path::new(arg_matches.value_of("INPUT_DIR").unwrap());
     let output_dir = Path::new(arg_matches.value_of("OUTPUT_DIR").unwrap());
 
-    let gqn_dataset = dataset::load_gqn_tfrecord(dataset_name, &input_dir).unwrap();
+    let gqn_dataset = dataset::DeepMindDataSet::load_dir(dataset_name, &input_dir, true).unwrap();
 
     let device = Device::cuda_if_available();
     let vs = nn::VarStore::new(device);
