@@ -21,11 +21,11 @@ pub struct GqnLSTM
 impl GqnLSTM
 {
     pub fn new(
-        p: &nn::Path,
+        vs: &nn::Path,
 
         biases: bool,
         train: bool,
-        
+
         in_channels: i64,
         out_channels: i64,
         kernel_size:i64,
@@ -41,20 +41,20 @@ impl GqnLSTM
         };
 
         let conv_ih = nn::conv2d(
-            p / "conv_ih",
+            vs / "conv_ih",
             in_channels,
             hidden_channels,
             kernel_size,
             conv_config,
         );
         let conv_hh = nn::conv2d(
-            p / "conv_hh",
+            vs / "conv_hh",
             out_channels,
             hidden_channels,
             kernel_size,
             conv_config,
         );
-        let device = p.device();
+        let device = vs.device();
 
         GqnLSTM {
             biases,

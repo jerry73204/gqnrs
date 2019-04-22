@@ -11,6 +11,7 @@ extern crate rayon;
 #[macro_use] extern crate log;
 extern crate tfrecord_rs;
 
+mod model;
 mod encoder;
 mod decoder;
 mod utils;
@@ -21,6 +22,7 @@ mod tf_proto;
 use std::path::Path;
 use tch::{nn, Device, Tensor, Kind};
 use yaml_rust::YamlLoader;
+use crate::encoder::GqnEncoder;
 
 fn main() {
     // Parse arguments

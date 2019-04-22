@@ -1,5 +1,11 @@
 use tch::{nn, Tensor};
 
+pub trait GqnEncoder
+{
+    fn new(vs: &nn::Path, pose_channels: i64) -> Self;
+    fn forward(&self, frames: &Tensor, poses: &Tensor) -> Tensor;
+}
+
 pub struct TowerEncoder
 {
     pose_channels: i64,
@@ -13,9 +19,9 @@ pub struct TowerEncoder
     conv8: nn::Conv2D,
 }
 
-impl TowerEncoder
+impl GqnEncoder for TowerEncoder
 {
-    pub fn new(vs: &nn::Path, pose_channels: i64) -> TowerEncoder
+    fn new(vs: &nn::Path, pose_channels: i64) -> TowerEncoder
     {
         let conv_config = |padding, stride| {
             nn::ConvConfig {padding: padding, stride: stride, ..Default::default()}
@@ -43,12 +49,8 @@ impl TowerEncoder
         }
     }
 
-    pub fn forward(&self, frames: &Tensor, poses: &Tensor) -> Tensor
+    fn forward(&self, frames: &Tensor, poses: &Tensor) -> Tensor
     {
-        let conv_config = |padding, stride| {
-            nn::ConvConfig {padding: padding, stride: stride, ..Default::default()}
-        };
-
         let mut net = frames.apply(&self.conv1);
         let mut skip = net.apply(&self.conv2);
         net = net.apply(&self.conv3);
@@ -69,6 +71,40 @@ impl TowerEncoder
 
         net = net.apply(&self.conv7);
         net = net.apply(&self.conv8);
+
+        net
+    }
+}
+
+pub struct PoolEncoder
+{
+    tower_encoder: TowerEncoder,
+}
+
+impl GqnEncoder for PoolEncoder
+{
+    fn new(vs: &nn::Path, pose_channels: i64) -> PoolEncoder
+    {
+        let tower_encoder = TowerEncoder::new(vs, pose_channels);
+
+        PoolEncoder {
+            tower_encoder,
+        }
+    }
+
+    fn forward(&self, frames: &Tensor, poses: &Tensor) -> Tensor
+    {
+        let mut net = self.tower_encoder.forward(frames, poses);
+        let net_size = net.size();
+        let batch_size = net_size[0];
+        let n_channels = net_size[1];
+        let height = net_size[2];
+        let width = net_size[3];
+
+        // reduce mean of height, width dimension
+        net = net.view(&[batch_size, n_channels, height * width])
+            .mean2(2, false)
+            .view(&[batch_size, n_channels, 1, 1]);
 
         net
     }
