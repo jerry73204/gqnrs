@@ -12,12 +12,9 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 image = "0.18.0"
 glob = "0.3.0"
-telamon-utils = { git = "https://github.com/ulysseB/telamon.git" }
 protobuf = { version = "2", features = ["with-bytes"] }
 byteorder = "1"
 crc = "1.8.1"
-ndarray = { version = "0.12.1", features = ["blas"] }
-blas-src = { version = "0.2.0", default-features = false, features = ["openblas"] }
-openblas-src = { version = "0.6.0", default-features = false, features = ["cblas", "system"] }
 rayon = "1.0"
 log = "0.4"
+tfrecord-rs = { git = "https://github.com/jerry73204/tfrecord-rs.git", rev = "HEAD" }

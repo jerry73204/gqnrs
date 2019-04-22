@@ -1,7 +1,6 @@
 extern crate byteorder;
 extern crate serde;
 extern crate image;
-extern crate telamon_utils;
 extern crate protobuf;
 extern crate crc;
 extern crate clap;
@@ -10,9 +9,10 @@ extern crate yaml_rust;
 extern crate glob;
 extern crate rayon;
 #[macro_use] extern crate log;
+extern crate tfrecord_rs;
 
+mod encoder;
 mod decoder;
-mod representation;
 mod utils;
 mod dataset;
 mod rnn;
@@ -60,9 +60,11 @@ args:
 
     let dummy_frames = Tensor::zeros(&[1, 3, 64, 64], (Kind::Float, device));
     let dummy_poses = Tensor::zeros(&[1, 7], (Kind::Float, device));
-    let tower_encoder = representation::tower_encoder(&vs.root(), &dummy_frames, &dummy_poses);
 
-    let lstm = rnn::GqnLSTM::new(&vs.root(), 3, 8, 5, 1.0, nn::RNNConfig {num_layers: 10, ..Default::default()});
+    let tower_encoder = encoder::TowerEncoder::new(&vs.root(), 10);
+    let dummy_repr = tower_encoder.forward(&dummy_frames, &dummy_poses);
+
+    let lstm = rnn::GqnLSTM::new(&vs.root(), true, true, 3, 8, 5, 1.0);
     let dummy_inputs = Tensor::zeros(&[32, 10, 3, 48, 48], (Kind::Float, device));
-    let (dummy_outputs, dummy_state) = lstm.seq(&dummy_inputs);
+    // let (dummy_outputs, dummy_state) = lstm.seq(&dummy_inputs);
 }

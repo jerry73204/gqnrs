@@ -13,6 +13,7 @@ use image::jpeg::JPEGDecoder;
 use image::ImageDecoder;
 use tch::Tensor;
 use rayon::prelude::*;
+use tfrecord_rs::loader::{MmapRecordLoader, RandomAccessRecordLoader};
 use crate::tf_proto::example::Example;
 
 pub struct DeepMindDataSet<'a>
@@ -41,8 +42,8 @@ impl<'a> DeepMindDataSet<'a>
         let train_dir = dataset_dir.join("train");
         let test_dir = dataset_dir.join("test");
 
-        let build_index = |dir: path::PathBuf, expect_num_files: u64| -> Result<_, Box<error::Error>> {
-            let mut paths = Vec::<_>::new();
+        let build_loaders = |dir: path::PathBuf, expect_num_files: u64| -> Result<_, Box<error::Error>> {
+            let mut paths = Vec::<path::PathBuf>::new();
             for entry in glob(dir.join("*.tfrecord").to_str().unwrap())?
             {
                 paths.push(entry?);
@@ -50,17 +51,17 @@ impl<'a> DeepMindDataSet<'a>
 
             assert!(paths.len() as u64 == expect_num_files);
 
-            let indexes: Vec<_> = paths.par_iter().map(|path| {
-                println!("Loading {}", path.display());
-                let record_index = Self::build_record_index(&path, check_integrity).unwrap();
-                (path.clone(), record_index)
+            let loaders: Vec<_> = paths.into_par_iter().map(|path: path::PathBuf| -> (path::PathBuf, RandomAccessRecordLoader<fs::File>) {
+                println!("Loading {}", path.as_path().display());
+                let loader = RandomAccessRecordLoader::from((path.as_path(), false));
+                (path, loader)
             }).collect();
 
-            Ok(indexes)
+            Ok(loaders)
         };
 
-        let train_indexes = build_index(train_dir, train_size)?;
-        let test_indexes = build_index(test_dir, test_size)?;
+        let train_loaders = build_loaders(train_dir, train_size)?;
+        let test_loaders = build_loaders(test_dir, test_size)?;
 
         let dataset = DeepMindDataSet {
             name: name,
@@ -70,158 +71,5 @@ impl<'a> DeepMindDataSet<'a>
             sequence_size,
         };
         Ok(dataset)
-    }
-
-    fn parse_example(
-        buf: &[u8],
-        sequence_size: i64,
-        num_camera_params: i64,
-        frame_size: i64,
-        channels: i64,
-    ) -> Result<(Tensor, Tensor), Box<error::Error>>
-    {
-        let make_corrupted_error = || {
-            io::Error::new(io::ErrorKind::Other, "corrupted error")
-        };
-
-        let example: Example = protobuf::parse_from_bytes(buf)?;
-        let features = example.get_features().get_feature();
-        let frames = features["frames"]
-            .get_bytes_list()
-            .get_value();
-        let cameras = features["cameras"]
-            .get_float_list()
-            .get_value();
-
-        if sequence_size != frames.len() as i64 ||
-            sequence_size * num_camera_params != cameras.len() as i64
-        {
-            return Err(Box::new(make_corrupted_error()));
-        }
-
-        let mut decoded_frames: Vec<f32> = Vec::new();
-        for ind in 0..sequence_size
-        {
-            let jpeg_bytes = &frames[ind as usize];
-            let mut decoder = JPEGDecoder::new(io::Cursor::new(jpeg_bytes));
-            let image = decoder.read_image()?;
-
-            let actual_size = match image
-            {
-                image::DecodingResult::U8(ref data) => data.len(),
-                image::DecodingResult::U16(ref data) => data.len(),
-            };
-            let expect_size: i64 = frame_size * frame_size * channels;
-            if expect_size != actual_size as i64
-            {
-                return Err(Box::new(make_corrupted_error()));
-            }
-
-            match image
-            {
-                image::DecodingResult::U8(ref data) => {
-                    let pixels = data.into_iter()
-                        .map(|v| *v as f32 / 255.);
-                    decoded_frames.extend(pixels);
-                }
-                image::DecodingResult::U16(ref data) => {
-                    let pixels = data.into_iter()
-                        .map(|v| *v as f32 / 255.);
-                    decoded_frames.extend(pixels);
-                }
-            };
-        }
-
-        let mut frames_tensor = Tensor::from(decoded_frames.as_slice());
-        let mut cameras_tensor = Tensor::from(cameras);
-
-        frames_tensor = frames_tensor.reshape(&[sequence_size, frame_size, frame_size, channels])
-            .permute(&[0, 3, 1, 2]);           // channel last to channel first
-        cameras_tensor = cameras_tensor.reshape(&[sequence_size, num_camera_params]);
-
-        Ok((frames_tensor, cameras_tensor))
-    }
-
-    fn build_record_index(path: &path::Path, check_integrity: bool) -> Result<Vec<(u64, u64)>, Box<error::Error>>
-    {
-        let make_corrupted_error = || { io::Error::new(io::ErrorKind::Other, "corrupted error") };
-        let make_truncated_error = || { io::Error::new(io::ErrorKind::UnexpectedEof, "corrupted error") };
-
-        let mut record_index: Vec<(u64, u64)> = Vec::new();
-        let mut file = fs::File::open(path)?;
-
-        let checksum = |buf: &[u8]| {
-            let cksum = crc32::checksum_castagnoli(buf);
-            ((cksum >> 15) | (cksum << 17)).wrapping_add(0xa282ead8u32)
-        };
-
-        let try_read_len = |file: &mut fs::File| -> Result<Option<u64>, Box<error::Error>> {
-            let mut len_buf = [0u8; 8];
-
-            match file.read(&mut len_buf)
-            {
-                Ok(0) => Ok(None),
-                Ok(n) if n == len_buf.len() => {
-                    let len = (&len_buf[..]).read_u64::<LittleEndian>()?;
-
-                    if check_integrity
-                    {
-                        let answer_cksum = file.read_u32::<LittleEndian>()?;
-                        if answer_cksum == checksum(&len_buf)
-                        {
-                            Ok(Some(len))
-                        }
-                        else
-                        {
-                            Err(Box::new(make_corrupted_error()))
-                        }
-                    }
-                    else
-                    {
-                        file.seek(io::SeekFrom::Current(4))?;
-                        Ok(Some(len))
-                    }
-                }
-                Ok(_) => Err(Box::new(make_truncated_error())),
-                Err(e) => Err(Box::new(e)),
-            }
-        };
-
-        let verify_record_integrity = |file: &mut fs::File, len: u64| -> Result<(), Box<error::Error>> {
-            let mut buf = Vec::<u8>::new();
-            file.take(len).read_to_end(&mut buf)?;
-            let answer_cksum = file.read_u32::<LittleEndian>()?;
-
-            if answer_cksum == checksum(&buf.as_slice())
-            {
-                Ok(())
-            }
-            else
-            {
-                Err(Box::new(make_corrupted_error()))
-            }
-        };
-
-        loop
-        {
-            match try_read_len(&mut file)?
-            {
-                None => break,
-                Some(len) => {
-                    let offset = file.seek(io::SeekFrom::Current(0))?;
-                    if check_integrity
-                    {
-                        verify_record_integrity(&mut file, len)?;
-                    }
-                    else
-                    {
-                        file.seek(io::SeekFrom::Current(len as i64 + 4))?;
-                    }
-                    record_index.push((offset, len));
-                }
-            }
-        }
-
-        Ok(record_index)
     }
 }
