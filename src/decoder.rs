@@ -2,8 +2,7 @@ use tch::{nn, Tensor, Kind, Device};
 use crate::utils;
 use crate::rnn;
 
-pub struct GqnDecoder
-{
+pub struct GqnDecoder {
     num_layers: i64,
     biases: bool,
     train: bool,
@@ -30,8 +29,7 @@ pub struct GqnDecoder
     device: Device,
 }
 
-pub struct GqnDecoderOutput
-{
+pub struct GqnDecoderOutput {
     target: Tensor,
     canvases: Vec<Tensor>,
 
@@ -46,8 +44,7 @@ pub struct GqnDecoderOutput
 
 }
 
-impl GqnDecoder
-{
+impl GqnDecoder {
     pub fn new(
         vs: &nn::Path,
 
@@ -66,8 +63,7 @@ impl GqnDecoder
         canvas_kernel_size: i64,
         target_kernel_size: i64,
 
-    ) -> GqnDecoder
-    {
+    ) -> GqnDecoder {
         let hidden_channels = 4 * cell_output_channels; // TODO remove this hard-code
         let canvas_conv_input_channels = target_channels + canvas_channels;
         let gen_input_channels = repr_channels + poses_channels + noise_channels;
@@ -80,8 +76,7 @@ impl GqnDecoder
         let mut inf_noise_convs = Vec::new();
         let mut gen_noise_convs = Vec::new();
 
-        for step in 0..num_layers
-        {
+        for step in 0..num_layers {
             // noise part
             let inf_noise_conv = nn::conv2d(
                 vs / &format!("inf_noise_conv_{}", step),
@@ -201,13 +196,13 @@ impl GqnDecoder
         }
     }
 
-    pub fn forward(
+    pub fn forward_t(
         &self,
         representation: &Tensor,
         query_poses: &Tensor,
-        target_frames: &Tensor
-    ) -> GqnDecoderOutput
-    {
+        target_frames: &Tensor,
+        train: bool,
+    ) -> GqnDecoderOutput {
         let repr_size = representation.size();
         let batch_size = repr_size[0];
         let repr_height = repr_size[2];
@@ -230,8 +225,7 @@ impl GqnDecoder
         let mut means_gen = Vec::new();
         let mut vars_gen = Vec::new();
 
-        for step in 0..(self.num_layers)
-        {
+        for step in 0..(self.num_layers) {
             let prev_inf_state_ref = match inf_states.last() {
                 Some(ref prev) => prev,
                 None => &inf_init_state,
@@ -317,8 +311,7 @@ impl GqnDecoder
         }
     }
 
-    fn make_noise(&self, hidden: &Tensor, conv: &nn::Conv2D) -> (Tensor, Tensor, Tensor)
-    {
+    fn make_noise(&self, hidden: &Tensor, conv: &nn::Conv2D) -> (Tensor, Tensor, Tensor) {
         let hidden_size = hidden.size();
         let batch_size = hidden_size[0];
         let hidden_channels = hidden_size[1];
@@ -343,8 +336,7 @@ impl GqnDecoder
 
 }
 
-fn broadcast_poses(poses: &Tensor, height: i64, width: i64) -> Tensor
-{
+fn broadcast_poses(poses: &Tensor, height: i64, width: i64) -> Tensor {
     let batch_size = poses.size()[0];
     poses.reshape(&[batch_size, utils::POSE_CHANNELS, 1, 1])
         .repeat(&[1, 1, height, width])

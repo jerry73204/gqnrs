@@ -3,70 +3,90 @@ extern crate serde;
 extern crate image;
 extern crate protobuf;
 extern crate crc;
-extern crate clap;
+#[macro_use] extern crate clap;
 extern crate tch;
 extern crate yaml_rust;
 extern crate glob;
 extern crate rayon;
+#[macro_use] extern crate maplit;
 #[macro_use] extern crate log;
+extern crate pretty_env_logger;
+#[macro_use] extern crate ndarray;
 extern crate tfrecord_rs;
 
+mod dist;
 mod model;
 mod encoder;
 mod decoder;
 mod utils;
 mod dataset;
 mod rnn;
-mod tf_proto;
+mod objective;
 
+use std::time::Instant;
+use std::error::Error;
 use std::path::Path;
 use tch::{nn, Device, Tensor, Kind};
 use yaml_rust::YamlLoader;
-use crate::encoder::GqnEncoder;
+use crate::encoder::TowerEncoder;
+use crate::model::GqnModel;
 
-fn main() {
+fn main() -> Result<(), Box<Error + Sync + Send>> {
+    pretty_env_logger::init();
+
     // Parse arguments
-    let arg_config = "
-name: gqnrs
-version: \"1.0\"
-author: Jerry Lin <jerry73204@gmail.com>
-about: GQN implementation in Rust
-args:
-    - DATASET_NAME:
-        short: n
-        long: dataset-name
-        required: true
-        takes_value: true
-    - INPUT_DIR:
-        short: i
-        long: input-dir
-        required: true
-        takes_value: true
-    - OUTPUT_DIR:
-        short: o
-        long: output-dir
-        required: true
-        takes_value: true
-";
-    let arg_yaml = YamlLoader::load_from_str(arg_config).unwrap();
-    let arg_matches = clap::App::from_yaml(&arg_yaml[0]).get_matches();
+    let arg_yaml = load_yaml!("args.yml");
+    let arg_matches = clap::App::from_yaml(arg_yaml).get_matches();
 
     let dataset_name = arg_matches.value_of("DATASET_NAME").unwrap();
     let input_dir = Path::new(arg_matches.value_of("INPUT_DIR").unwrap());
     let output_dir = Path::new(arg_matches.value_of("OUTPUT_DIR").unwrap());
 
-    let gqn_dataset = dataset::DeepMindDataSet::load_dir(dataset_name, &input_dir, true).unwrap();
-
     let device = Device::cuda_if_available();
     let vs = nn::VarStore::new(device);
 
-    let dummy_frames = Tensor::zeros(&[1, 3, 64, 64], (Kind::Float, device));
-    let dummy_poses = Tensor::zeros(&[1, 7], (Kind::Float, device));
+    // Load dataset
+    info!("Loading dataset");
 
-    let tower_encoder = encoder::TowerEncoder::new(&vs.root(), 10);
-    let dummy_repr = tower_encoder.forward(&dummy_frames, &dummy_poses);
+    let gqn_dataset = dataset::DeepMindDataSet::load_dir(
+        dataset_name,
+        &input_dir,
+        false,
+        &device,
+    )?;
 
-    let lstm = rnn::GqnLSTM::new(&vs.root(), true, true, 3, 8, 5, 1.0);
-    let dummy_inputs = Tensor::zeros(&[32, 10, 3, 48, 48], (Kind::Float, device));
-    // let (dummy_outputs, dummy_state) = lstm.seq(&dummy_inputs);
+    // Init model
+    info!("Initialize model");
+
+    let vs_root = vs.root();
+    let model = GqnModel::<TowerEncoder>::new(&vs_root);
+
+    let mut cnt = 0;
+    let mut instant = Instant::now();
+
+    for example in gqn_dataset.train_iter {
+        cnt += 1;
+        let millis = instant.elapsed().as_millis();
+
+        if millis >= 1000 {
+            println!("#total {}", cnt);
+            cnt = 0;
+            instant = Instant::now();
+        }
+
+        // let frames = match &example["frames"] {
+        //     Feature::TorchTensorList(list) => list,
+        //     _ => panic!("Unexpected feature type"),
+        // };
+
+        // let cameras = match &example["cameras"] {
+        //     Feature::TorchTensor(tensor) => tensor,
+        //     _ => panic!("Unexpected feature type"),
+        // };
+
+        // info!("{:?} {:?}", frames[0].size(), cameras.size());
+        // assert!(frames.len() == utils::SEQ_LENGTH as usize);
+    }
+
+    Ok(())
 }

@@ -3,7 +3,7 @@ use tch::{nn, Tensor};
 pub trait GqnEncoder
 {
     fn new(vs: &nn::Path, pose_channels: i64) -> Self;
-    fn forward(&self, frames: &Tensor, poses: &Tensor) -> Tensor;
+    fn forward_t(&self, frames: &Tensor, poses: &Tensor, train: bool) -> Tensor;
 }
 
 pub struct TowerEncoder
@@ -49,7 +49,7 @@ impl GqnEncoder for TowerEncoder
         }
     }
 
-    fn forward(&self, frames: &Tensor, poses: &Tensor) -> Tensor
+    fn forward_t(&self, frames: &Tensor, poses: &Tensor, train: bool) -> Tensor
     {
         let mut net = frames.apply(&self.conv1);
         let mut skip = net.apply(&self.conv2);
@@ -92,9 +92,9 @@ impl GqnEncoder for PoolEncoder
         }
     }
 
-    fn forward(&self, frames: &Tensor, poses: &Tensor) -> Tensor
+    fn forward_t(&self, frames: &Tensor, poses: &Tensor, train: bool) -> Tensor
     {
-        let mut net = self.tower_encoder.forward(frames, poses);
+        let mut net = self.tower_encoder.forward_t(frames, poses, train);
         let net_size = net.size();
         let batch_size = net_size[0];
         let n_channels = net_size[1];

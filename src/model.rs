@@ -10,13 +10,10 @@ pub struct GqnModel<E: encoder::GqnEncoder>
 }
 
 impl<E> GqnModel<E> where
-    E: encoder::GqnEncoder
-{
+    E: encoder::GqnEncoder {
     pub fn new(
         vs: &nn::Path,
-        train: bool,
-    ) -> GqnModel<E>
-    {
+    ) -> GqnModel<E> {
         let encoder = E::new(&(vs / "encoder"), utils::POSE_CHANNELS);
         let decoder = decoder::GqnDecoder::new(
             &(vs / "decoder"),
@@ -40,17 +37,22 @@ impl<E> GqnModel<E> where
         }
     }
 
-    pub fn forward(
+    pub fn forward_t(
         &self,
         context_frames: &Tensor,
         context_poses: &Tensor,
         query_poses: &Tensor,
         target_frames: &Tensor,
-    ) -> decoder::GqnDecoderOutput
-    {
-        let representation = self.encoder.forward(context_frames, context_poses);
+        train: bool,
+    ) -> decoder::GqnDecoderOutput {
+        let representation = self.encoder.forward_t(context_frames, context_poses, train);
+        println!("{:?}", representation.size());
         // TODO reshaping
-        let decoder_output = self.decoder.forward(&representation, query_poses, target_frames);
+        let decoder_output = self.decoder.forward_t(&representation, query_poses, target_frames, train);
         decoder_output
+    }
+
+    pub fn backward_fn(&self) {
+
     }
 }

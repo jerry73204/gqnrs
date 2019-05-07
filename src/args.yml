@@ -1,0 +1,20 @@
+name: gqnrs
+version: "1.0"
+author: Jerry Lin <jerry73204@gmail.com>
+about: GQN implementation in Rust
+args:
+  - DATASET_NAME:
+      short: n
+      long: dataset-name
+      required: true
+      takes_value: true
+  - INPUT_DIR:
+      short: i
+      long: input-dir
+      required: true
+      takes_value: true
+  - OUTPUT_DIR:
+      short: o
+      long: output-dir
+      required: true
+      takes_value: true
