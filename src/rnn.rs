@@ -1,13 +1,11 @@
 use tch::{nn, Device, Tensor, Kind};
 
-pub struct GqnLSTMState
-{
+pub struct GqnLSTMState {
     pub h: Tensor,
     pub c: Tensor,
 }
 
-pub struct GqnLSTM
-{
+pub struct GqnLSTM {
     biases: bool,
     train: bool,
     conv_ih: nn::Conv2D,
@@ -18,14 +16,11 @@ pub struct GqnLSTM
     device: Device,
 }
 
-impl GqnLSTM
-{
+impl GqnLSTM {
     pub fn new(
         vs: &nn::Path,
-
         biases: bool,
         train: bool,
-
         in_channels: i64,
         out_channels: i64,
         kernel_size:i64,
@@ -68,8 +63,7 @@ impl GqnLSTM
         }
     }
 
-    pub fn zero_state(&self, batch: i64, height: i64, width: i64) -> GqnLSTMState
-    {
+    pub fn zero_state(&self, batch: i64, height: i64, width: i64) -> GqnLSTMState {
         let hidden_size = [batch, self.out_channels, height, width];
 
         let h = Tensor::zeros(&hidden_size, (Kind::Float, self.device));
@@ -78,13 +72,28 @@ impl GqnLSTM
         GqnLSTMState { h, c }
     }
 
-    pub fn step(&self, input: &Tensor, hx: &Tensor, cx: &Tensor) -> GqnLSTMState
-    {
+    pub fn step(&self, input: &Tensor, hx: &Tensor, cx: &Tensor) -> GqnLSTMState {
         let gates = input.apply(&self.conv_ih) + hx.apply(&self.conv_hh);
-        let mut in_gate = gates.narrow(1, 0 * self.out_channels, self.out_channels);
-        let mut forget_gate = gates.narrow(1, 1 * self.out_channels, self.out_channels);
-        let mut cell_gate = gates.narrow(1, 2 * self.out_channels, self.out_channels);
-        let mut out_gate = gates.narrow(1, 3 * self.out_channels, self.out_channels);
+        let mut in_gate = gates.narrow(
+            1,
+            0 * self.out_channels,
+            self.out_channels,
+        );
+        let mut forget_gate = gates.narrow(
+            1,
+            1 * self.out_channels,
+            self.out_channels,
+        );
+        let mut cell_gate = gates.narrow(
+            1,
+            2 * self.out_channels,
+            self.out_channels,
+        );
+        let mut out_gate = gates.narrow(
+            1,
+            3 * self.out_channels,
+            self.out_channels,
+        );
 
         in_gate = in_gate.sigmoid();
         forget_gate = forget_gate.sigmoid() + self.forget_bias;

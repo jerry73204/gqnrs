@@ -1,20 +1,21 @@
-use std::io::{self, Read, Seek};
+use std::io;
 use std::any::Any;
 use std::error::Error;
 use std::path;
 use std::time::Instant;
 use std::collections::HashMap;
-use serde::Deserialize;
-use glob::glob;
+// use glob::glob;
 use yaml_rust::YamlLoader;
 use byteorder::{ReadBytesExt, LittleEndian};
-use crc::crc32;
 use tch::{Tensor, Device};
 use rayon::prelude::*;
-use image::ImageFormat;
 use ndarray::{ArrayBase, Array2, Array3, Axis};
-use tfrecord_rs::iter::{DsIterator};
+use par_map::ParMap;
+use itertools::Itertools;
+use tfrecord_rs::ExampleType;
+use tfrecord_rs::iter::DsIterator;
 use tfrecord_rs::loader::{LoaderOptions, LoaderMethod, Loader, IndexedLoader};
+use tfrecord_rs::utils::{bytes_to_example, decode_image_on_example, example_to_torch_tensor, make_batch};
 
 pub struct DeepMindDataSet<'a> {
     pub name: &'a str,
@@ -23,19 +24,18 @@ pub struct DeepMindDataSet<'a> {
     pub frame_size: u64,
     pub sequence_size: u64,
     pub num_channels: u64,
-    pub train_iter: Box<Iterator<Item=HashMap<String, Box<dyn Any>>>>,
-    // pub train_iter: Box<Iterator<Item=HashMap<String, Box<dyn Any + Sync + Send>>>>,
-    pub test_iter: Box<Iterator<Item=HashMap<String, Box<dyn Any>>>>,
-    device: &'a Device,
+    pub train_iter: Box<Iterator<Item=HashMap<String, Box<dyn Any>>> + 'a>,
+    pub test_iter: Box<Iterator<Item=HashMap<String, Box<dyn Any>>> + 'a>,
+    device: Device,
 }
-
 
 impl<'a> DeepMindDataSet<'a> {
     pub fn load_dir(
         name: &'a str,
         dataset_dir: &path::Path,
         check_integrity: bool,
-        device: &'a Device,
+        device: Device,
+        batch_size: usize,
     ) -> Result<DeepMindDataSet<'a>, Box<Error + Sync + Send>> {
         let dataset_spec = &YamlLoader::load_from_str(include_str!("dataset.yaml"))?[0];
         let num_channels: u64 = dataset_spec["num_channels"].as_i64().unwrap() as u64;
@@ -60,13 +60,12 @@ impl<'a> DeepMindDataSet<'a> {
             .map(|p| p.unwrap())
             .collect();
 
-        let preprocessor = move |mut example: HashMap<String, Box<dyn Any + Sync + Send>>| -> HashMap<String, Box<dyn Any + Sync + Send>> {
+        let preprocessor = move |mut example: ExampleType| -> ExampleType {
             let (_, cameras_ref) = example.remove_entry("cameras").unwrap();
             let (_, mut frames_ref) = example.remove_entry("frames").unwrap();
 
+            // Process camera data
             let cameras = cameras_ref.downcast_ref::<Vec<f32>>().unwrap();
-            let frames = frames_ref.downcast_mut::<Vec<Array3<u8>>>().unwrap();
-
             let (context_cameras, query_camera) = {
                 assert!((sequence_size * num_camera_params) as usize == cameras.len());
 
@@ -90,31 +89,59 @@ impl<'a> DeepMindDataSet<'a> {
                 (context_cameras, query_camera)
             };
 
+            // Process frame data
+            let mut frames = frames_ref
+                .downcast_mut::<Vec<Array3<u8>>>()
+                .unwrap()
+                .iter()
+                .map(|array| {
+                    array.mapv(|val| val as f32)
+                        .permuted_axes([2, 0, 1])
+                })
+                .collect::<Vec<_>>();
+
             let (context_frames, target_frame) = {
                 let shape = frames[0].shape();
-                let width = shape[0];
+                let channels = shape[0];
                 let height = shape[1];
-                let channels = shape[2];
+                let width = shape[2];
 
-                assert!(sequence_size as usize == frames.len());
-                assert!(width == frame_size as usize &&
+                assert!(sequence_size as usize == frames.len() &&
+                        width == frame_size as usize &&
                         height == frame_size as usize &&
                         channels == 3);
 
-                let target_frame = frames.pop().unwrap();
+                let target_frame = frames.pop()
+                    .unwrap();
+                let frames_expanded = frames.into_iter()
+                    .map(|array| array.insert_axis(Axis(0)))
+                    .collect::<Vec<_>>();
 
-                let contextn_frame_views = frames.into_iter()
+                let frame_views = frames_expanded.iter()
                     .map(|array| array.view())
                     .collect::<Vec<_>>();
 
-                let context_frames = ndarray::stack(Axis(0), &contextn_frame_views).unwrap();
+                let context_frames = ndarray::stack(Axis(0), &frame_views).unwrap();
                 (context_frames, target_frame)
             };
 
-            example.insert("context_frames".to_owned(), Box::new(context_frames));
-            example.insert("query_frame".to_owned(), Box::new(target_frame));
-            example.insert("context_cameras".to_owned(), Box::new(context_cameras));
-            example.insert("query_camera".to_owned(), Box::new(query_camera));
+            // Save example
+            example.insert(
+                "context_frames".to_owned(),
+                Box::new(context_frames.into_dyn())
+            );
+            example.insert(
+                "target_frame".to_owned(),
+                Box::new(target_frame.into_dyn())
+            );
+            example.insert(
+                "context_cameras".to_owned(),
+                Box::new(context_cameras.into_dyn())
+            );
+            example.insert(
+                "query_camera".to_owned(),
+                Box::new(query_camera.into_dyn())
+            );
 
             example
         };
@@ -132,49 +159,36 @@ impl<'a> DeepMindDataSet<'a> {
             .shuffle(8192)
             .load_by_tfrecord_index(train_loader)
             .unwrap_result()
-            .to_tf_example(None)
+            .par_map(|bytes| bytes_to_example(&bytes, None))
             .unwrap_result()
-            .scan(
-                (Instant::now(), 0),
-                |(instant, cnt), example| {
-                    *cnt += 1;
-                    let millis = instant.elapsed().as_millis();
-                    if millis >= 1000 {
-                        println!("#1 {}", cnt);
-                        *cnt = 0;
-                        *instant = Instant::now();
-                    }
-                    Some(example)
+            .par_map(|example| {
+                decode_image_on_example(
+                    example,
+                    Some(hashmap!("frames" => None))
+                )
             })
-            .prefetch(8192)
-            .scan(
-                (Instant::now(), 0),
-                |(instant, cnt), example| {
-                    *cnt += 1;
-                    let millis = instant.elapsed().as_millis();
-                    if millis >= 1000 {
-                        println!("#2 {}", cnt);
-                        *cnt = 0;
-                        *instant = Instant::now();
-                    }
-                    Some(example)
-            })
-            .par_decode_image(Some(hashmap!("frames".to_owned() => None)), 8192)
             .unwrap_result()
-            .scan(
-                (Instant::now(), 0),
-                |(instant, cnt), example| {
-                    *cnt += 1;
-                    let millis = instant.elapsed().as_millis();
-                    if millis >= 1000 {
-                        println!("#3 {}", cnt);
-                        *cnt = 0;
-                        *instant = Instant::now();
+            .par_map(preprocessor)
+            .batching(move |it| {
+                let mut buf = Vec::new();
+
+                while buf.len() < batch_size {
+                    match it.next() {
+                        Some(example) => buf.push(example),
+                        None => break,
                     }
-                    Some(example)
+                }
+
+                if buf.is_empty() {
+                    None
+                }
+                else {
+                    Some(make_batch(buf))
+                }
             })
-            .map(preprocessor)
-            .to_torch_tensor(None)
+            .unwrap_result()
+            .prefetch(256)
+            .map(move |example| example_to_torch_tensor(example, None, device))
             .unwrap_result();
 
         let test_options = LoaderOptions {
@@ -190,13 +204,36 @@ impl<'a> DeepMindDataSet<'a> {
             .shuffle(8192)
             .load_by_tfrecord_index(test_loader)
             .unwrap_result()
-            .to_tf_example(None)
+            .par_map(|bytes| bytes_to_example(&bytes, None))
             .unwrap_result()
-            .prefetch(8192)
-            .par_decode_image(Some(hashmap!("frames".to_owned() => None)), 8192)
+            .par_map(|example| {
+                decode_image_on_example(
+                    example,
+                    Some(hashmap!("frames" => None))
+                )
+            })
             .unwrap_result()
-            .map(preprocessor)
-            .to_torch_tensor(None)
+            .par_map(preprocessor)
+            .batching(move |it| {
+                let mut buf = Vec::new();
+
+                while buf.len() < batch_size {
+                    match it.next() {
+                        Some(example) => buf.push(example),
+                        None => break,
+                    }
+                }
+
+                if buf.is_empty() {
+                    None
+                }
+                else {
+                    Some(make_batch(buf))
+                }
+            })
+            .unwrap_result()
+            .prefetch(256)
+            .map(move |example| example_to_torch_tensor(example, None, device))
             .unwrap_result();
 
         let dataset = DeepMindDataSet {

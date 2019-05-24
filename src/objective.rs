@@ -22,7 +22,7 @@ pub fn elbo(
     );
 
     let normal_target = Normal::new(means_target, stds_target);
-    let target_llh = normal_target.log_prob(target_frame).mean3(0, Kind::Float);
+    let target_llh = normal_target.log_prob(target_frame).mean3(&[0], Kind::Float);
 
     let mut kl_div_sum = None;
     for ind in 0..seq_len {
@@ -41,7 +41,7 @@ pub fn elbo(
         };
     }
 
-    let kl_regularizer = kl_div_sum.unwrap().mean3(0, Kind::Float);
+    let kl_regularizer = kl_div_sum.unwrap().mean3(&[0], Kind::Float);
 
     let elbo = target_llh + kl_regularizer;
 

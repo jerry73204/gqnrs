@@ -13,6 +13,8 @@ extern crate rayon;
 extern crate pretty_env_logger;
 #[macro_use] extern crate ndarray;
 extern crate tfrecord_rs;
+extern crate par_map;
+#[macro_use] extern crate itertools;
 
 mod dist;
 mod model;
@@ -31,6 +33,9 @@ use yaml_rust::YamlLoader;
 use crate::encoder::TowerEncoder;
 use crate::model::GqnModel;
 
+use std::any::Any;
+use ndarray::{ArrayD, Array3};
+
 fn main() -> Result<(), Box<Error + Sync + Send>> {
     pretty_env_logger::init();
 
@@ -41,8 +46,12 @@ fn main() -> Result<(), Box<Error + Sync + Send>> {
     let dataset_name = arg_matches.value_of("DATASET_NAME").unwrap();
     let input_dir = Path::new(arg_matches.value_of("INPUT_DIR").unwrap());
     let output_dir = Path::new(arg_matches.value_of("OUTPUT_DIR").unwrap());
+    let batch_size: usize = match arg_matches.value_of("BATCH_SIZE") {
+        Some(arg) => arg.parse()?,
+        None => 10,
+    };
 
-    let device = Device::cuda_if_available();
+    let device = Device::Cuda(0);
     let vs = nn::VarStore::new(device);
 
     // Load dataset
@@ -52,7 +61,8 @@ fn main() -> Result<(), Box<Error + Sync + Send>> {
         dataset_name,
         &input_dir,
         false,
-        &device,
+        device,
+        batch_size,
     )?;
 
     // Init model
@@ -64,29 +74,25 @@ fn main() -> Result<(), Box<Error + Sync + Send>> {
     let mut cnt = 0;
     let mut instant = Instant::now();
 
-    for example in gqn_dataset.train_iter {
-        cnt += 1;
-        let millis = instant.elapsed().as_millis();
+    tch::no_grad(|| {
+        for example in gqn_dataset.train_iter {
+            cnt += 1;
+            let millis = instant.elapsed().as_millis();
 
-        if millis >= 1000 {
-            println!("#total {}", cnt);
-            cnt = 0;
-            instant = Instant::now();
+            if millis >= 1000 {
+                info!("rate: {}/s", cnt);
+                cnt = 0;
+                instant = Instant::now();
+            }
+
+            let context_frames = example["context_frames"].downcast_ref::<Tensor>().unwrap();
+            let target_frame = example["target_frame"].downcast_ref::<Tensor>().unwrap();
+            let context_cameras = example["context_cameras"].downcast_ref::<Tensor>().unwrap();
+            let query_camera = example["query_camera"].downcast_ref::<Tensor>().unwrap();
+
+            model.forward_t(context_frames, context_cameras, query_camera, target_frame, true);
         }
-
-        // let frames = match &example["frames"] {
-        //     Feature::TorchTensorList(list) => list,
-        //     _ => panic!("Unexpected feature type"),
-        // };
-
-        // let cameras = match &example["cameras"] {
-        //     Feature::TorchTensor(tensor) => tensor,
-        //     _ => panic!("Unexpected feature type"),
-        // };
-
-        // info!("{:?} {:?}", frames[0].size(), cameras.size());
-        // assert!(frames.len() == utils::SEQ_LENGTH as usize);
-    }
+    });
 
     Ok(())
 }

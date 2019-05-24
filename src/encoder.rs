@@ -1,14 +1,13 @@
 use tch::{nn, Tensor};
 
-pub trait GqnEncoder
-{
-    fn new(vs: &nn::Path, pose_channels: i64) -> Self;
+pub trait GqnEncoder {
+    fn new(vs: &nn::Path, repr_channels: i64, pose_channels: i64) -> Self;
     fn forward_t(&self, frames: &Tensor, poses: &Tensor, train: bool) -> Tensor;
 }
 
-pub struct TowerEncoder
-{
+pub struct TowerEncoder {
     pose_channels: i64,
+    repr_channels: i64,
     conv1: nn::Conv2D,
     conv2: nn::Conv2D,
     conv3: nn::Conv2D,
@@ -19,10 +18,8 @@ pub struct TowerEncoder
     conv8: nn::Conv2D,
 }
 
-impl GqnEncoder for TowerEncoder
-{
-    fn new(vs: &nn::Path, pose_channels: i64) -> TowerEncoder
-    {
+impl GqnEncoder for TowerEncoder {
+    fn new(vs: &nn::Path, repr_channels: i64, pose_channels: i64) -> TowerEncoder {
         let conv_config = |padding, stride| {
             nn::ConvConfig {padding: padding, stride: stride, ..Default::default()}
         };
@@ -34,10 +31,11 @@ impl GqnEncoder for TowerEncoder
         let conv5 = nn::conv2d(vs / "conv5", 263, 128, 1, conv_config(0, 1));
         let conv6 = nn::conv2d(vs / "conv6", 263, 128, 3, conv_config(1, 1));
         let conv7 = nn::conv2d(vs / "conv7", 128, 256, 3, conv_config(1, 1));
-        let conv8 = nn::conv2d(vs / "conv8", 256, 256, 1, conv_config(0, 1));
+        let conv8 = nn::conv2d(vs / "conv8", 256, repr_channels, 1, conv_config(0, 1));
 
         TowerEncoder {
             pose_channels,
+            repr_channels,
             conv1,
             conv2,
             conv3,
@@ -49,8 +47,7 @@ impl GqnEncoder for TowerEncoder
         }
     }
 
-    fn forward_t(&self, frames: &Tensor, poses: &Tensor, train: bool) -> Tensor
-    {
+    fn forward_t(&self, frames: &Tensor, poses: &Tensor, train: bool) -> Tensor {
         let mut net = frames.apply(&self.conv1);
         let mut skip = net.apply(&self.conv2);
         net = net.apply(&self.conv3);
@@ -76,24 +73,20 @@ impl GqnEncoder for TowerEncoder
     }
 }
 
-pub struct PoolEncoder
-{
+pub struct PoolEncoder {
     tower_encoder: TowerEncoder,
 }
 
-impl GqnEncoder for PoolEncoder
-{
-    fn new(vs: &nn::Path, pose_channels: i64) -> PoolEncoder
-    {
-        let tower_encoder = TowerEncoder::new(vs, pose_channels);
+impl GqnEncoder for PoolEncoder {
+    fn new(vs: &nn::Path, repr_channels: i64, pose_channels: i64) -> PoolEncoder {
+        let tower_encoder = TowerEncoder::new(vs, repr_channels, pose_channels);
 
         PoolEncoder {
             tower_encoder,
         }
     }
 
-    fn forward_t(&self, frames: &Tensor, poses: &Tensor, train: bool) -> Tensor
-    {
+    fn forward_t(&self, frames: &Tensor, poses: &Tensor, train: bool) -> Tensor {
         let mut net = self.tower_encoder.forward_t(frames, poses, train);
         let net_size = net.size();
         let batch_size = net_size[0];
@@ -103,7 +96,7 @@ impl GqnEncoder for PoolEncoder
 
         // reduce mean of height, width dimension
         net = net.view(&[batch_size, n_channels, height * width])
-            .mean2(2, false)
+            .mean2(&[2], false)
             .view(&[batch_size, n_channels, 1, 1]);
 
         net

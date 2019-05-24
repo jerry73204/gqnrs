@@ -18,3 +18,8 @@ args:
       long: output-dir
       required: true
       takes_value: true
+  - BATCH_SIZE:
+      short: b
+      long: batch-size
+      required: false
+      takes_value: true
