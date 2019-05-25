@@ -48,7 +48,7 @@ fn main() -> Result<(), Box<Error + Sync + Send>> {
     let output_dir = Path::new(arg_matches.value_of("OUTPUT_DIR").unwrap());
     let batch_size: usize = match arg_matches.value_of("BATCH_SIZE") {
         Some(arg) => arg.parse()?,
-        None => 10,
+        None => 8,
     };
 
     let device = Device::Cuda(0);
@@ -74,25 +74,30 @@ fn main() -> Result<(), Box<Error + Sync + Send>> {
     let mut cnt = 0;
     let mut instant = Instant::now();
 
-    tch::no_grad(|| {
-        for example in gqn_dataset.train_iter {
-            cnt += 1;
-            let millis = instant.elapsed().as_millis();
+    for (step, example) in gqn_dataset.train_iter.enumerate() {
+        cnt += 1;
+        let millis = instant.elapsed().as_millis();
 
-            if millis >= 1000 {
-                info!("rate: {}/s", cnt);
-                cnt = 0;
-                instant = Instant::now();
-            }
-
-            let context_frames = example["context_frames"].downcast_ref::<Tensor>().unwrap();
-            let target_frame = example["target_frame"].downcast_ref::<Tensor>().unwrap();
-            let context_cameras = example["context_cameras"].downcast_ref::<Tensor>().unwrap();
-            let query_camera = example["query_camera"].downcast_ref::<Tensor>().unwrap();
-
-            model.forward_t(context_frames, context_cameras, query_camera, target_frame, true);
+        if millis >= 1000 {
+            info!("rate: {}/s", cnt);
+            cnt = 0;
+            instant = Instant::now();
         }
-    });
+
+        let context_frames = example["context_frames"].downcast_ref::<Tensor>().unwrap();
+        let target_frame = example["target_frame"].downcast_ref::<Tensor>().unwrap();
+        let context_cameras = example["context_cameras"].downcast_ref::<Tensor>().unwrap();
+        let query_camera = example["query_camera"].downcast_ref::<Tensor>().unwrap();
+
+        model.forward_t(
+            context_frames,
+            context_cameras,
+            query_camera,
+            target_frame,
+            step as i64,
+            true,
+        );
+    }
 
     Ok(())
 }

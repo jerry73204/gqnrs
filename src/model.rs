@@ -1,27 +1,42 @@
 use std::any::TypeId;
-use tch::{nn, Tensor};
+use tch::{nn, nn::OptimizerConfig, Tensor, Kind, Device};
 use crate::encoder::{GqnEncoder, TowerEncoder, PoolEncoder};
 use crate::decoder::{GqnDecoder, GqnDecoderOutput};
 use crate::utils;
+use crate::dist::{Rv, Normal};
+use crate::objective::elbo;
 
-pub struct GqnModel<E: GqnEncoder>
-{
+pub struct GqnModelOutput {
+    elbo_loss: Tensor,
+    target_mse: Tensor,
+    target_sample: Tensor,
+    means_target: Tensor,
+    stds_target: Tensor,
+    canvases: Tensor,
+    means_inf: Tensor,
+    stds_inf: Tensor,
+    means_gen: Tensor,
+    stds_gen: Tensor,
+}
+
+pub struct GqnModel<E: GqnEncoder> {
     encoder: E,
     decoder: GqnDecoder,
+    device: Device,
 }
 
 impl<E: 'static> GqnModel<E> where
-    E: GqnEncoder
+    E: GqnEncoder,
 {
-    pub fn new(vs: &nn::Path) -> GqnModel<E> {
+    pub fn new(path: &nn::Path) -> GqnModel<E> {
         let encoder = E::new(
-            &(vs / "encoder"),
+            &(path / "encoder"),
             utils::ENC_CHANNELS,
             utils::POSE_CHANNELS,
         );
 
         let decoder = GqnDecoder::new(
-            &(vs / "decoder"),  // path
+            &(path / "decoder"),  // path
             utils::SEQ_LENGTH,  // num layers
             true,               // biases
             true,               // train
@@ -36,9 +51,12 @@ impl<E: 'static> GqnModel<E> where
             utils::ETA_EXTERNAL_KERNEL_SIZE,
         );
 
+        let device = path.device();
+
         GqnModel {
             encoder,
             decoder,
+            device,
         }
     }
 
@@ -48,8 +66,9 @@ impl<E: 'static> GqnModel<E> where
         context_poses: &Tensor,
         query_poses: &Tensor,
         target_frame: &Tensor,
+        step: i64,
         train: bool,
-    ) -> GqnDecoderOutput
+    ) -> GqnModelOutput
     {
         // Pack encoder input, melt batch and seq dimensions
         let (batch_size, seq_size, channels, height, width) = {
@@ -115,11 +134,62 @@ impl<E: 'static> GqnModel<E> where
             }
         };
 
-        let decoder_output = self.decoder.forward_t(&broadcast_repr, query_poses, target_frame, train);
-        decoder_output
+        let GqnDecoderOutput {
+            means_target,
+            canvases,
+            // inf_states: Vec<rnn::GqnLSTMState>,
+            // gen_states: Vec<rnn::GqnLSTMState>,
+            means_inf,
+            stds_inf,
+            means_gen,
+            stds_gen,
+        } = self.decoder.forward_t(&broadcast_repr, query_poses, target_frame, train);
+
+        let stds_target = pixel_std_annealing(&means_target.size(), step, self.device);
+        let target_normal = Normal::new(&means_target, &stds_target);
+        let target_sample = target_normal.sample();
+
+        // 0 means 'none' reduction
+        // See https://github.com/pytorch/pytorch/blob/master/torch/nn/_reduction.py
+        let target_frame_no_grad = target_frame.set_requires_grad(false);
+        let target_mse = means_target.mse_loss(&target_frame_no_grad, 1);
+
+        let elbo_loss = elbo(
+            &means_target,
+            &stds_target,
+            &means_inf,
+            &stds_inf,
+            &means_gen,
+            &means_gen,
+            &target_frame_no_grad,
+        );
+
+        GqnModelOutput {
+            elbo_loss,
+            target_mse,
+            means_target,
+            stds_target,
+            target_sample,
+            canvases,
+            means_inf,
+            stds_inf,
+            means_gen,
+            stds_gen,
+        }
     }
 
     pub fn backward_fn(&self) {
         // TODO
     }
+}
+
+fn pixel_std_annealing(shape: &[i64], step: i64, device: Device) -> Tensor {
+    let sigma_i = utils::GENERATOR_SIGMA_ALPHA;
+    let sigma_f = utils::GENERATOR_SIGMA_BETA;
+    let anneal_max_step = utils::ANNEAL_SIGMA_TAU;
+    let std = sigma_f + (sigma_i - sigma_f) * (1.0 - step as f64 / anneal_max_step);
+
+    let mut tensor = Tensor::zeros(shape, (Kind::Float, device));
+    tensor.init(nn::Init::Const(std));
+    tensor
 }

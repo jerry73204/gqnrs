@@ -187,7 +187,7 @@ impl<'a> DeepMindDataSet<'a> {
                 }
             })
             .unwrap_result()
-            .prefetch(256)
+            .prefetch(512)
             .map(move |example| example_to_torch_tensor(example, None, device))
             .unwrap_result();
 
@@ -232,7 +232,7 @@ impl<'a> DeepMindDataSet<'a> {
                 }
             })
             .unwrap_result()
-            .prefetch(256)
+            .prefetch(512)
             .map(move |example| example_to_torch_tensor(example, None, device))
             .unwrap_result();
 

@@ -30,17 +30,14 @@ pub struct GqnDecoder {
 }
 
 pub struct GqnDecoderOutput {
-    target: Tensor,
-    canvases: Vec<Tensor>,
-
-    inf_states: Vec<rnn::GqnLSTMState>,
-    gen_states: Vec<rnn::GqnLSTMState>,
-
-    means_inf: Vec<Tensor>,
-    vars_inf: Vec<Tensor>,
-
-    means_gen: Vec<Tensor>,
-    vars_gen: Vec<Tensor>,
+    pub means_target: Tensor,
+    pub canvases: Tensor,
+    // pub inf_states: Vec<rnn::GqnLSTMState>,
+    // pub gen_states: Vec<rnn::GqnLSTMState>,
+    pub means_inf: Tensor,
+    pub stds_inf: Tensor,
+    pub means_gen: Tensor,
+    pub stds_gen: Tensor,
 }
 
 impl GqnDecoder {
@@ -231,9 +228,9 @@ impl GqnDecoder {
         let mut gen_states = Vec::new();
         let mut canvases = Vec::new();
         let mut means_inf = Vec::new();
-        let mut vars_inf = Vec::new();
+        let mut stds_inf = Vec::new();
         let mut means_gen = Vec::new();
-        let mut vars_gen = Vec::new();
+        let mut stds_gen = Vec::new();
 
         for step in 0..(self.num_layers) {
             // Extract tensors from previous step
@@ -275,11 +272,11 @@ impl GqnDecoder {
 
             // Create noise tensor
             // We have different random source for training/eval mode
-            let (mean_inf, var_inf, noise_inf) = self.make_noise(
+            let (mean_inf, std_inf, noise_inf) = self.make_noise(
                 prev_inf_h,
                 &self.inf_noise_convs[step as usize],
             );
-            let (mean_gen, var_gen, noise_gen) = self.make_noise(
+            let (mean_gen, std_gen, noise_gen) = self.make_noise(
                 prev_gen_h,
                 &self.gen_noise_convs[step as usize],
             );
@@ -303,26 +300,29 @@ impl GqnDecoder {
             inf_states.push(inf_state);
 
             means_inf.push(mean_inf);
-            vars_inf.push(var_inf);
+            stds_inf.push(std_inf);
 
             means_gen.push(mean_gen);
-            vars_gen.push(var_gen);
+            stds_gen.push(std_gen);
         }
 
-        let target = canvases.last().unwrap().apply(&self.target_conv);
+        let means_target = canvases.last().unwrap().apply(&self.target_conv);
+        let canvases_tensor = Tensor::stack(&canvases, 1);
+        let means_inf_tensor = Tensor::stack(&means_inf, 1);
+        let stds_inf_tensor = Tensor::stack(&stds_inf, 1);
+        let means_gen_tensor = Tensor::stack(&means_gen, 1);
+        let stds_gen_tensor = Tensor::stack(&stds_gen, 1);
+
 
         GqnDecoderOutput {
-            target,
-            canvases,
-
-            inf_states,
-            gen_states,
-
-            means_inf,
-            vars_inf,
-
-            means_gen,
-            vars_gen,
+            means_target,
+            canvases: canvases_tensor,
+            // inf_states,
+            // gen_states,
+            means_inf: means_inf_tensor,
+            stds_inf: stds_inf_tensor,
+            means_gen: means_gen_tensor,
+            stds_gen: stds_gen_tensor,
         }
     }
 
@@ -334,18 +334,18 @@ impl GqnDecoder {
 
         // Eta function
         let conv_hidden = hidden.apply(conv);
-        let mu = conv_hidden.narrow(1, 0, self.noise_channels);
-        let raw_sigma = conv_hidden.narrow(1, self.noise_channels, self.noise_channels);
-        let sigma = (raw_sigma + 0.5).softplus() + 1e-8;
+        let means = conv_hidden.narrow(1, 0, self.noise_channels);
+        let raw_stds = conv_hidden.narrow(1, self.noise_channels, self.noise_channels);
+        let stds = (raw_stds + 0.5).softplus() + 1e-8;
 
         // Compute noise
         let random_source = Tensor::randn(
             &[batch_size, self.noise_channels, hidden_height, hidden_width],
             (Kind::Float, self.device)
         );
-        let noise = &sigma * random_source;
+        let noise = &stds * random_source;
 
-        (mu, sigma, noise)
+        (means, stds, noise)
     }
 
 }
