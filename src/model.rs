@@ -7,16 +7,16 @@ use crate::dist::{Rv, Normal};
 use crate::objective::elbo;
 
 pub struct GqnModelOutput {
-    elbo_loss: Tensor,
-    target_mse: Tensor,
-    target_sample: Tensor,
-    means_target: Tensor,
-    stds_target: Tensor,
-    canvases: Tensor,
-    means_inf: Tensor,
-    stds_inf: Tensor,
-    means_gen: Tensor,
-    stds_gen: Tensor,
+    pub elbo_loss: Tensor,
+    pub target_mse: Tensor,
+    pub target_sample: Tensor,
+    pub means_target: Tensor,
+    pub stds_target: Tensor,
+    pub canvases: Tensor,
+    pub means_inf: Tensor,
+    pub stds_inf: Tensor,
+    pub means_gen: Tensor,
+    pub stds_gen: Tensor,
 }
 
 pub struct GqnModel<E: GqnEncoder> {
@@ -176,10 +176,6 @@ impl<E: 'static> GqnModel<E> where
             means_gen,
             stds_gen,
         }
-    }
-
-    pub fn backward_fn(&self) {
-        // TODO
     }
 }
 

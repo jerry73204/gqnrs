@@ -28,10 +28,10 @@ mod objective;
 use std::time::Instant;
 use std::error::Error;
 use std::path::Path;
-use tch::{nn, Device, Tensor, Kind};
+use tch::{nn, nn::OptimizerConfig, Device, Tensor, Kind};
 use yaml_rust::YamlLoader;
 use crate::encoder::TowerEncoder;
-use crate::model::GqnModel;
+use crate::model::{GqnModel, GqnModelOutput};
 
 use std::any::Any;
 use ndarray::{ArrayD, Array3};
@@ -48,7 +48,7 @@ fn main() -> Result<(), Box<Error + Sync + Send>> {
     let output_dir = Path::new(arg_matches.value_of("OUTPUT_DIR").unwrap());
     let batch_size: usize = match arg_matches.value_of("BATCH_SIZE") {
         Some(arg) => arg.parse()?,
-        None => 8,
+        None => 1,
     };
 
     let device = Device::Cuda(0);
@@ -70,6 +70,7 @@ fn main() -> Result<(), Box<Error + Sync + Send>> {
 
     let vs_root = vs.root();
     let model = GqnModel::<TowerEncoder>::new(&vs_root);
+    let opt = nn::Adam::default().build(&vs, 1e-3)?;
 
     let mut cnt = 0;
     let mut instant = Instant::now();
@@ -89,7 +90,18 @@ fn main() -> Result<(), Box<Error + Sync + Send>> {
         let context_cameras = example["context_cameras"].downcast_ref::<Tensor>().unwrap();
         let query_camera = example["query_camera"].downcast_ref::<Tensor>().unwrap();
 
-        model.forward_t(
+        let GqnModelOutput {
+            elbo_loss,
+            target_mse,
+            means_target,
+            stds_target,
+            target_sample,
+            canvases,
+            means_inf,
+            stds_inf,
+            means_gen,
+            stds_gen,
+        } = model.forward_t(
             context_frames,
             context_cameras,
             query_camera,
@@ -97,6 +109,10 @@ fn main() -> Result<(), Box<Error + Sync + Send>> {
             step as i64,
             true,
         );
+
+        info!("step: {}\telbo_loss: {}", step, elbo_loss.double_value(&[]));
+
+        opt.backward_step(&elbo_loss);
     }
 
     Ok(())
