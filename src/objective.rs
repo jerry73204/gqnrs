@@ -1,4 +1,4 @@
-use tch::{nn, Tensor, Kind};
+use tch::{nn, Tensor};
 use crate::dist::{Normal, Rv, KLDiv};
 
 pub fn elbo(
@@ -40,6 +40,7 @@ pub fn elbo(
         let normal_gen_l = Normal::new(&means_gen_l, &stds_gen_l);
 
         let kl_div_l = normal_inf_l.kl_div(&normal_gen_l);
+
         kl_div_sum = match kl_div_sum {
             Some(sum) => Some(sum + kl_div_l),
             None => Some(kl_div_l),
@@ -51,5 +52,10 @@ pub fn elbo(
         .sum2(&[0, 1, 2], false);
 
     let elbo = target_llh + kl_regularizer;
+
     elbo
+}
+
+fn has_nan(tensor: &Tensor) -> bool {
+    tensor.isnan().any().int64_value(&[]) == 1
 }

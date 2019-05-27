@@ -1,8 +1,11 @@
-use tch::{self, nn, Tensor};
+mod math;
+
+use tch::Tensor;
 
 pub trait Rv {
     fn sample(&self) -> Tensor;
     fn log_prob(&self, value: &Tensor) -> Tensor;
+    fn log_cdf(&self, value: &Tensor) -> Tensor;
     fn cdf(&self, value: &Tensor) -> Tensor;
 }
 
@@ -23,6 +26,18 @@ impl<'a> Normal<'a> {
             std,
         }
     }
+
+    fn z(&self, x: &Tensor) -> Tensor {
+        (x - self.mean) /  self.std
+    }
+
+    fn log_unnormalized_prob(&self, x: &Tensor) -> Tensor {
+        -0.5 * self.z(x).pow(2)
+    }
+
+    fn log_normalization(&self) -> Tensor {
+        0.5 * (2.0 * std::f64::consts::PI).ln() + self.std.log()
+    }
 }
 
 impl<'a> Rv for Normal<'a> {
@@ -30,24 +45,30 @@ impl<'a> Rv for Normal<'a> {
         Tensor::normal2(&self.mean, &self.std)
     }
 
+    // References
+    // https://github.com/tensorflow/probability/blob/master/tensorflow_probability/python/distributions/normal.py
+    // https://github.com/tensorflow/probability/blob/master/tensorflow_probability/python/internal/special_math.py
     fn log_prob(&self, value: &Tensor) -> Tensor {
-        let var = self.std.pow(2);
-        let log_scale = self.std.log();
-        -(value - self.mean).pow(2) / (2 * var) - log_scale - (2_f64 * std::f64::consts::PI).sqrt().ln()
+        self.log_unnormalized_prob(value) - self.log_normalization()
+    }
+
+    fn log_cdf(&self, value: &Tensor) -> Tensor {
+        let z = self.z(value);
+        math::log_ndtr(&z)
     }
 
     fn cdf(&self, value: &Tensor) -> Tensor {
-        0.5_f64 * (1_f64 + Tensor::erf(
-            &( (value - self.mean) * self.std.reciprocal() / (2_f64).sqrt()) )
-        )
+        let z = self.z(value);
+        math::ndtr(&z)
     }
 }
 
 impl<'a> KLDiv<Normal<'a>> for Normal<'a> {
     fn kl_div(& self, other: & Normal) -> Tensor {
+        let var_a = self.std.pow(2);
+        let var_b = other.std.pow(2);
+        let ratio = &var_a / &var_b;
 
-        let var_ratio = (self.std / other.std).pow(2);
-        let t1 = ((self.mean - other.mean) / other.std).pow(2);
-        0.5_f64 * (&var_ratio + t1 - 1_f64 - &var_ratio.log())
+        (self.mean - other.mean).pow(2) / (2. * var_b) + 0.5 * (&ratio - 1 - ratio.log())
     }
 }

@@ -28,13 +28,9 @@ mod objective;
 use std::time::Instant;
 use std::error::Error;
 use std::path::Path;
-use tch::{nn, nn::OptimizerConfig, Device, Tensor, Kind};
-use yaml_rust::YamlLoader;
+use tch::{nn, nn::OptimizerConfig, Device, Tensor};
 use crate::encoder::TowerEncoder;
 use crate::model::{GqnModel, GqnModelOutput};
-
-use std::any::Any;
-use ndarray::{ArrayD, Array3};
 
 fn main() -> Result<(), Box<Error + Sync + Send>> {
     pretty_env_logger::init();
@@ -48,7 +44,7 @@ fn main() -> Result<(), Box<Error + Sync + Send>> {
     let output_dir = Path::new(arg_matches.value_of("OUTPUT_DIR").unwrap());
     let batch_size: usize = match arg_matches.value_of("BATCH_SIZE") {
         Some(arg) => arg.parse()?,
-        None => 1,
+        None => 3,
     };
 
     let device = Device::Cuda(0);

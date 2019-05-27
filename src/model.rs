@@ -160,9 +160,10 @@ impl<E: 'static> GqnModel<E> where
             &means_inf,
             &stds_inf,
             &means_gen,
-            &means_gen,
+            &stds_gen,
             &target_frame_no_grad,
         );
+
 
         GqnModelOutput {
             elbo_loss,
