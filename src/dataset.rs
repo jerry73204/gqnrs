@@ -6,13 +6,11 @@ use std::time::Instant;
 use std::collections::HashMap;
 // use glob::glob;
 use yaml_rust::YamlLoader;
-use byteorder::{ReadBytesExt, LittleEndian};
 use tch::{Tensor, Device};
-use rayon::prelude::*;
 use ndarray::{ArrayBase, Array2, Array3, Axis};
 use par_map::ParMap;
 use itertools::Itertools;
-use tfrecord_rs::ExampleType;
+use tfrecord_rs::{ExampleType, ErrorType};
 use tfrecord_rs::iter::DsIterator;
 use tfrecord_rs::loader::{LoaderOptions, LoaderMethod, Loader, IndexedLoader};
 use tfrecord_rs::utils::{bytes_to_example, decode_image_on_example, example_to_torch_tensor, make_batch};
@@ -24,9 +22,8 @@ pub struct DeepMindDataSet<'a> {
     pub frame_size: u64,
     pub sequence_size: u64,
     pub num_channels: u64,
-    pub train_iter: Box<Iterator<Item=HashMap<String, Box<dyn Any>>> + 'a>,
-    pub test_iter: Box<Iterator<Item=HashMap<String, Box<dyn Any>>> + 'a>,
-    device: Device,
+    pub train_iter: Box<Iterator<Item=HashMap<String, Box<dyn Any + Send>>> + 'a>,
+    pub test_iter: Box<Iterator<Item=HashMap<String, Box<dyn Any + Send>>> + 'a>,
 }
 
 impl<'a> DeepMindDataSet<'a> {
@@ -146,6 +143,13 @@ impl<'a> DeepMindDataSet<'a> {
             example
         };
 
+        let image_decoder = |example: ExampleType| {
+            decode_image_on_example(
+                example,
+                Some(hashmap!("frames" => None))
+            )
+        };
+
         let train_options = LoaderOptions {
             check_integrity: check_integrity,
             auto_close: false,
@@ -161,12 +165,7 @@ impl<'a> DeepMindDataSet<'a> {
             .unwrap_result()
             .par_map(|bytes| bytes_to_example(&bytes, None))
             .unwrap_result()
-            .par_map(|example| {
-                decode_image_on_example(
-                    example,
-                    Some(hashmap!("frames" => None))
-                )
-            })
+            .par_map(image_decoder)
             .unwrap_result()
             .par_map(preprocessor)
             .batching(move |it| {
@@ -188,7 +187,7 @@ impl<'a> DeepMindDataSet<'a> {
             })
             .unwrap_result()
             .prefetch(512)
-            .map(move |example| example_to_torch_tensor(example, None, device))
+            .par_map(move |example| example_to_torch_tensor(example, None, device))
             .unwrap_result();
 
         let test_options = LoaderOptions {
@@ -206,12 +205,7 @@ impl<'a> DeepMindDataSet<'a> {
             .unwrap_result()
             .par_map(|bytes| bytes_to_example(&bytes, None))
             .unwrap_result()
-            .par_map(|example| {
-                decode_image_on_example(
-                    example,
-                    Some(hashmap!("frames" => None))
-                )
-            })
+            .par_map(image_decoder)
             .unwrap_result()
             .par_map(preprocessor)
             .batching(move |it| {
@@ -233,7 +227,7 @@ impl<'a> DeepMindDataSet<'a> {
             })
             .unwrap_result()
             .prefetch(512)
-            .map(move |example| example_to_torch_tensor(example, None, device))
+            .par_map(move |example| example_to_torch_tensor(example, None, device))
             .unwrap_result();
 
         let dataset = DeepMindDataSet {
@@ -245,7 +239,6 @@ impl<'a> DeepMindDataSet<'a> {
             num_channels,
             train_iter: Box::new(train_iter),
             test_iter: Box::new(test_iter),
-            device,
         };
         Ok(dataset)
     }
