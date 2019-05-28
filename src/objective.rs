@@ -56,6 +56,6 @@ pub fn elbo(
     elbo
 }
 
-fn has_nan(tensor: &Tensor) -> bool {
-    tensor.isnan().any().int64_value(&[]) == 1
-}
+// fn has_nan(tensor: &Tensor) -> bool {
+//     tensor.isnan().any().int64_value(&[]) == 1
+// }

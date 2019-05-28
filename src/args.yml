@@ -13,13 +13,23 @@ args:
       long: input-dir
       required: true
       takes_value: true
-  - OUTPUT_DIR:
-      short: o
-      long: output-dir
-      required: true
-      takes_value: true
+  # - OUTPUT_DIR:
+  #     short: o
+  #     long: output-dir
+  #     required: true
+  #     takes_value: true
   - BATCH_SIZE:
       short: b
       long: batch-size
       required: false
       takes_value: true
+  - MODEL_FILE:
+      short: m
+      long: model-file
+      takes_value: true
+  - SAVE_STEPS:
+      long: save-steps
+      takes_value: true
+  # - NUM_GPUS:
+  #     long: num-gpus
+  #     takes_value: true

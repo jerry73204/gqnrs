@@ -25,10 +25,12 @@ mod dataset;
 mod rnn;
 mod objective;
 
+use std::any::Any;
 use std::time::Instant;
 use std::error::Error;
 use std::path::Path;
 use tch::{nn, nn::OptimizerConfig, Device, Tensor};
+use par_map::ParMap;
 use crate::encoder::TowerEncoder;
 use crate::model::{GqnModel, GqnModelOutput};
 
@@ -41,14 +43,25 @@ fn main() -> Result<(), Box<Error + Sync + Send>> {
 
     let dataset_name = arg_matches.value_of("DATASET_NAME").unwrap();
     let input_dir = Path::new(arg_matches.value_of("INPUT_DIR").unwrap());
-    let output_dir = Path::new(arg_matches.value_of("OUTPUT_DIR").unwrap());
+    let model_file = match arg_matches.value_of("MODEL_FILE") {
+        Some(file) => Some(Path::new(file)),
+        None => None,
+    };
+    let save_steps: usize = match arg_matches.value_of("SAVE_STEPS") {
+        Some(steps) => {
+            let save_steps = steps.parse()?;
+            assert!(save_steps > 0);
+            save_steps
+        },
+        None => 128,
+    };
     let batch_size: usize = match arg_matches.value_of("BATCH_SIZE") {
         Some(arg) => arg.parse()?,
         None => 3,
     };
 
     let device = Device::Cuda(0);
-    let vs = nn::VarStore::new(device);
+    let mut vs = nn::VarStore::new(device);
 
     // Load dataset
     info!("Loading dataset");
@@ -68,6 +81,14 @@ fn main() -> Result<(), Box<Error + Sync + Send>> {
     let model = GqnModel::<TowerEncoder>::new(&vs_root);
     let opt = nn::Adam::default().build(&vs, 1e-3)?;
 
+    // Load model params
+    if let Some(path) = model_file {
+        if path.is_file() {
+            info!("Loading model parameters");
+            vs.load(path)?;
+        }
+    }
+
     let mut cnt = 0;
     let mut instant = Instant::now();
 
@@ -86,6 +107,8 @@ fn main() -> Result<(), Box<Error + Sync + Send>> {
         let context_cameras = example["context_cameras"].downcast_ref::<Tensor>().unwrap();
         let query_camera = example["query_camera"].downcast_ref::<Tensor>().unwrap();
 
+
+        continue;
         let GqnModelOutput {
             elbo_loss,
             target_mse,
@@ -106,9 +129,15 @@ fn main() -> Result<(), Box<Error + Sync + Send>> {
             true,
         );
 
+        opt.backward_step(&elbo_loss);
         info!("step: {}\telbo_loss: {}", step, elbo_loss.double_value(&[]));
 
-        opt.backward_step(&elbo_loss);
+
+        if let Some(path) = model_file {
+            if step % save_steps == 0 {
+                vs.save(path)?;
+            }
+        }
     }
 
     Ok(())
