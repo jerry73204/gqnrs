@@ -164,7 +164,6 @@ impl<E: 'static> GqnModel<E> where
             &target_frame_no_grad,
         );
 
-
         GqnModelOutput {
             elbo_loss,
             target_mse,

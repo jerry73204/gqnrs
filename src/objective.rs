@@ -25,7 +25,7 @@ pub fn elbo(
     );
 
     let normal_target = Normal::new(means_target, stds_target);
-    let target_llh = normal_target.log_prob(target_frame)
+    let target_llh = -normal_target.log_prob(target_frame)
         .mean2(&[0], false)
         .sum2(&[0, 1, 2], false);
 

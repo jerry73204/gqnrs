@@ -36,7 +36,7 @@ impl<'a> Normal<'a> {
     }
 
     fn log_normalization(&self) -> Tensor {
-        0.5 * (2.0 * std::f64::consts::PI).ln() + self.std.log()
+        0.5 * (2. * std::f64::consts::PI).ln() + self.std.log()
     }
 }
 
