@@ -56,8 +56,20 @@ fn main() -> Result<(), Box<Error + Sync + Send>> {
         None => 128,
     };
     let batch_size: usize = match arg_matches.value_of("BATCH_SIZE") {
-        Some(arg) => arg.parse()?,
+        Some(arg) => {
+            let batch_size = arg.parse()?;
+            assert!(batch_size > 0);
+            batch_size
+        }
         None => 3,
+    };
+    let num_gpus: usize = match arg_matches.value_of("NUM_GPUS") {
+        Some(arg) => {
+            let num_gpus = arg.parse()?;
+            assert!(num_gpus > 0);
+            num_gpus
+        }
+        None => 1,
     };
 
     let device = Device::Cuda(0);
@@ -107,8 +119,6 @@ fn main() -> Result<(), Box<Error + Sync + Send>> {
         let context_cameras = example["context_cameras"].downcast_ref::<Tensor>().unwrap();
         let query_camera = example["query_camera"].downcast_ref::<Tensor>().unwrap();
 
-
-        continue;
         let GqnModelOutput {
             elbo_loss,
             target_mse,
