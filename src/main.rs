@@ -15,6 +15,7 @@ extern crate pretty_env_logger;
 extern crate tfrecord_rs;
 extern crate par_map;
 #[macro_use] extern crate itertools;
+extern crate crossbeam;
 
 mod dist;
 mod model;
@@ -31,6 +32,8 @@ use std::error::Error;
 use std::path::Path;
 use tch::{nn, nn::OptimizerConfig, Device, Tensor};
 use par_map::ParMap;
+use crossbeam::channel::bounded;
+use tfrecord_rs::ExampleType;
 use crate::encoder::TowerEncoder;
 use crate::model::{GqnModel, GqnModelOutput};
 
@@ -72,8 +75,17 @@ fn main() -> Result<(), Box<Error + Sync + Send>> {
         None => 1,
     };
 
-    let device = Device::Cuda(0);
-    let mut vs = nn::VarStore::new(device);
+    // Init varaible stores
+    let mut devices = vec![];
+    let mut var_stores = vec![];
+
+    for n in 0..num_gpus {
+        let device = Device::Cuda(n);
+        let vs = nn::VarStore::new(device);
+
+        devices.push(device);
+        var_stores.push(vs);
+    }
 
     // Load dataset
     info!("Loading dataset");
@@ -82,73 +94,138 @@ fn main() -> Result<(), Box<Error + Sync + Send>> {
         dataset_name,
         &input_dir,
         false,
-        device,
+        devices,
         batch_size,
     )?;
 
     // Init model
     info!("Initialize model");
 
-    let vs_root = vs.root();
-    let model = GqnModel::<TowerEncoder>::new(&vs_root);
-    let opt = nn::Adam::default().build(&vs, 1e-3)?;
-
     // Load model params
     if let Some(path) = model_file {
         if path.is_file() {
             info!("Loading model parameters");
-            vs.load(path)?;
-        }
-    }
 
-    let mut cnt = 0;
-    let mut instant = Instant::now();
-
-    for (step, example) in gqn_dataset.train_iter.enumerate() {
-        cnt += 1;
-        let millis = instant.elapsed().as_millis();
-
-        if millis >= 1000 {
-            info!("rate: {}/s", cnt);
-            cnt = 0;
-            instant = Instant::now();
-        }
-
-        let context_frames = example["context_frames"].downcast_ref::<Tensor>().unwrap();
-        let target_frame = example["target_frame"].downcast_ref::<Tensor>().unwrap();
-        let context_cameras = example["context_cameras"].downcast_ref::<Tensor>().unwrap();
-        let query_camera = example["query_camera"].downcast_ref::<Tensor>().unwrap();
-
-        let GqnModelOutput {
-            elbo_loss,
-            target_mse,
-            means_target,
-            stds_target,
-            target_sample,
-            canvases,
-            means_inf,
-            stds_inf,
-            means_gen,
-            stds_gen,
-        } = model.forward_t(
-            context_frames,
-            context_cameras,
-            query_camera,
-            target_frame,
-            step as i64,
-            true,
-        );
-
-        opt.backward_step(&elbo_loss);
-        info!("step: {}\telbo_loss: {}", step, elbo_loss.double_value(&[]));
-
-
-        if let Some(path) = model_file {
-            if step % save_steps == 0 {
-                vs.save(path)?;
+            for vs in &mut var_stores {
+                vs.load(path)?;
             }
         }
     }
 
+    crossbeam::scope(|scope| {
+        // Spawn train workers
+        let mut req_senders = vec![];
+        let (resp_sender, resp_receiver) = bounded(num_gpus);
+
+        for n in 0..num_gpus {
+            let (req_sender, req_receiver) = bounded(1);
+            let resp_sender_worker = resp_sender.clone();
+            let vs = &var_stores[n];
+
+            scope.spawn(move |_| {
+                // Init model
+                let root = vs.root();
+                let model = GqnModel::<TowerEncoder>::new(&root);
+
+                loop {
+                    let (step, example) = match req_receiver.recv().unwrap() {
+                        Some(req) => req,
+                        None => return,
+                    };
+
+                    let ret = run_model(&model, example, step);
+                    resp_sender_worker.send(ret).unwrap();
+                }
+            });
+
+            req_senders.push(req_sender);
+        }
+
+        // Produce train examples
+        let mut cnt = 0;
+        let mut instant = Instant::now();
+
+        for (step, examples) in gqn_dataset.train_iter.enumerate() {
+            cnt += 1;
+            let millis = instant.elapsed().as_millis();
+
+            if millis >= 1000 {
+                info!("rate: {}/s", cnt);
+                cnt = 0;
+                instant = Instant::now();
+            }
+
+            // Send to workers
+            let n_examples = examples.len();
+            req_senders.iter().zip(examples.into_iter())
+                .for_each(|(sender, example)| {
+                    sender.send(Some((step as i64, example))).unwrap();
+                });
+
+            // Receive from workers
+            let mut resps = vec![];
+            while resps.len() < n_examples {
+                let output = resp_receiver.recv().unwrap();
+                resps.push(output);
+            }
+
+            // TODO run optimizer and copy trainable variables accross gpus
+
+            // let GqnModelOutput {
+            //     elbo_loss,
+            //     target_mse,
+            //     means_target,
+            //     stds_target,
+            //     target_sample,
+            //     canvases,
+            //     means_inf,
+            //     stds_inf,
+            //     means_gen,
+            //     stds_gen,
+            // };
+
+            // opt.backward_step(&elbo_loss);
+            // info!("step: {}\telbo_loss: {}", step, elbo_loss.double_value(&[]));
+
+
+            // if let Some(path) = model_file {
+            //     if step % save_steps == 0 {
+            //         vs.save(path)?;
+            //     }
+            // }
+
+            // let mut opts = vec![];
+            // for vs in &var_stores {
+            //     let opt = nn::Adam::default().build(&vs, 1e-3)?;
+
+            //     models.push(model);
+            //     opts.push(opt);
+            // }
+        }
+
+        // Gracefully terminate workers
+        req_senders.into_iter()
+            .for_each(|sender| {
+                sender.send(None).unwrap();
+            });
+
+    }).unwrap();
+
     Ok(())
+}
+
+fn run_model(model: &GqnModel<TowerEncoder>, example: ExampleType, step: i64) -> GqnModelOutput {
+    let context_frames = example["context_frames"].downcast_ref::<Tensor>().unwrap();
+    let target_frame = example["target_frame"].downcast_ref::<Tensor>().unwrap();
+    let context_cameras = example["context_cameras"].downcast_ref::<Tensor>().unwrap();
+    let query_camera = example["query_camera"].downcast_ref::<Tensor>().unwrap();
+
+    model.forward_t(
+        context_frames,
+        context_cameras,
+        query_camera,
+        target_frame,
+        step,
+        true,
+    )
 }

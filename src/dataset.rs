@@ -22,8 +22,8 @@ pub struct DeepMindDataSet<'a> {
     pub frame_size: u64,
     pub sequence_size: u64,
     pub num_channels: u64,
-    pub train_iter: Box<Iterator<Item=HashMap<String, Box<dyn Any + Send>>> + 'a>,
-    pub test_iter: Box<Iterator<Item=HashMap<String, Box<dyn Any + Send>>> + 'a>,
+    pub train_iter: Box<Iterator<Item=Vec<ExampleType>> + 'a>,
+    pub test_iter: Box<Iterator<Item=Vec<ExampleType>> + 'a>,
 }
 
 impl<'a> DeepMindDataSet<'a> {
@@ -31,9 +31,10 @@ impl<'a> DeepMindDataSet<'a> {
         name: &'a str,
         dataset_dir: &path::Path,
         check_integrity: bool,
-        device: Device,
+        devices: Vec<Device>,
         batch_size: usize,
     ) -> Result<DeepMindDataSet<'a>, Box<Error + Sync + Send>> {
+        // Load dataset config
         let dataset_spec = &YamlLoader::load_from_str(include_str!("dataset.yaml"))?[0];
         let num_channels: u64 = dataset_spec["num_channels"].as_i64().unwrap() as u64;
         let num_camera_params: u64 = dataset_spec["num_camera_params"].as_i64().unwrap() as u64;
@@ -42,7 +43,9 @@ impl<'a> DeepMindDataSet<'a> {
         let test_size: u64 = dataset_info["test_size"].as_i64().unwrap() as u64;
         let frame_size: u64 = dataset_info["frame_size"].as_i64().unwrap() as u64;
         let sequence_size: u64 = dataset_info["sequence_size"].as_i64().unwrap() as u64;
+        let num_devices = devices.len();
 
+        // List files
         let train_dir = dataset_dir.join("train");
         let test_dir = dataset_dir.join("test");
 
@@ -57,6 +60,7 @@ impl<'a> DeepMindDataSet<'a> {
             .map(|p| p.unwrap())
             .collect();
 
+        // Data processors
         let preprocessor = move |mut example: ExampleType| -> ExampleType {
             let (_, cameras_ref) = example.remove_entry("cameras").unwrap();
             let (_, mut frames_ref) = example.remove_entry("frames").unwrap();
@@ -150,6 +154,8 @@ impl<'a> DeepMindDataSet<'a> {
             )
         };
 
+        // Define train iterator
+        let train_devices = devices.clone();
         let train_options = LoaderOptions {
             check_integrity: check_integrity,
             auto_close: false,
@@ -187,9 +193,38 @@ impl<'a> DeepMindDataSet<'a> {
             })
             .unwrap_result()
             .prefetch(512)
-            .par_map(move |example| example_to_torch_tensor(example, None, device))
-            .unwrap_result();
+            .enumerate()
+            .par_map(move |(idx, example)| {
+                let dev_idx = idx % train_devices.len();
+                let device = train_devices[dev_idx];
+                let new_example = match example_to_torch_tensor(example, None, device) {
+                    Ok(ret) => ret,
+                    Err(err) => return Err(err),
+                };
+                Ok(new_example)
+            })
+            .unwrap_result()
+            .batching(move |it| {
+                // Here assumes par_map() is ordered
+                let mut buf = vec![];
+                while buf.len() < num_devices {
+                    match it.next() {
+                        Some(example) => buf.push(example),
+                        None => break,
+                    }
+                }
 
+                if buf.is_empty() {
+                    None
+                }
+                else {
+                    Some(buf)
+                }
+            });
+
+
+        // Define test iterator
+        let test_devices = devices;
         let test_options = LoaderOptions {
             check_integrity: check_integrity,
             auto_close: false,
@@ -227,8 +262,34 @@ impl<'a> DeepMindDataSet<'a> {
             })
             .unwrap_result()
             .prefetch(512)
-            .par_map(move |example| example_to_torch_tensor(example, None, device))
-            .unwrap_result();
+            .enumerate()
+            .par_map(move |(idx, example)| {
+                let dev_idx = idx % test_devices.len();
+                let device = test_devices[dev_idx];
+                let new_example = match example_to_torch_tensor(example, None, device) {
+                    Ok(ret) => ret,
+                    Err(err) => return Err(err),
+                };
+                Ok(new_example)
+            })
+            .unwrap_result()
+            .batching(move |it| {
+                // Here assumes par_map() is ordered
+                let mut buf = vec![];
+                while buf.len() < num_devices {
+                    match it.next() {
+                        Some(example) => buf.push(example),
+                        None => break,
+                    }
+                }
+
+                if buf.is_empty() {
+                    None
+                }
+                else {
+                    Some(buf)
+                }
+            });
 
         let dataset = DeepMindDataSet {
             name: name,
