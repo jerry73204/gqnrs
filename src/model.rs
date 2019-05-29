@@ -1,5 +1,5 @@
 use std::any::TypeId;
-use tch::{nn, nn::OptimizerConfig, Tensor, Kind, Device};
+use tch::{nn, nn::OptimizerConfig, Tensor, Kind, Device, Reduction};
 use crate::encoder::{GqnEncoder, TowerEncoder, PoolEncoder};
 use crate::decoder::{GqnDecoder, GqnDecoderOutput};
 use crate::utils;
@@ -149,10 +149,8 @@ impl<E: 'static> GqnModel<E> where
         let target_normal = Normal::new(&means_target, &stds_target);
         let target_sample = target_normal.sample();
 
-        // 0 means 'none' reduction
-        // See https://github.com/pytorch/pytorch/blob/master/torch/nn/_reduction.py
         let target_frame_no_grad = target_frame.set_requires_grad(false);
-        let target_mse = means_target.mse_loss(&target_frame_no_grad, 1);
+        let target_mse = means_target.mse_loss(&target_frame_no_grad, Reduction::Mean);
 
         let elbo_loss = elbo(
             &means_target,

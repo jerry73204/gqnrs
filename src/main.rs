@@ -216,7 +216,7 @@ fn main() -> Result<(), Box<Error + Sync + Send>> {
                                         {
                                             let receiver = param_receiver.as_ref().unwrap();
                                             let from_vs = receiver.recv().unwrap();
-                                            vs.copy_(&from_vs);
+                                            vs.copy(&from_vs);
                                         } // This scope makes sures deallocation of from_vs
                                         update_barrier_worker.wait();
                                     }
