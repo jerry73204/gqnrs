@@ -224,7 +224,7 @@ impl<'a> DeepMindDataSet<'a> {
 
 
         // Define test iterator
-        let test_devices = devices;
+        let test_devices = devices.clone();
         let test_options = LoaderOptions {
             check_integrity: check_integrity,
             auto_close: false,
