@@ -94,7 +94,7 @@ fn main() -> Result<(), Box<Error + Sync + Send>> {
         dataset_name,
         &input_dir,
         false,
-        devices,
+        devices.clone(),
         batch_size,
     )?;
 
@@ -111,6 +111,9 @@ fn main() -> Result<(), Box<Error + Sync + Send>> {
             }
         }
     }
+
+    // Init optimizer
+    let opt = nn::Adam::default().build(&var_stores[0], 1e-3)?;
 
     crossbeam::scope(|scope| {
         // Spawn train workers
@@ -142,18 +145,10 @@ fn main() -> Result<(), Box<Error + Sync + Send>> {
         }
 
         // Produce train examples
-        let mut cnt = 0;
-        let mut instant = Instant::now();
+        let global_instant = Instant::now();
 
         for (step, examples) in gqn_dataset.train_iter.enumerate() {
-            cnt += 1;
-            let millis = instant.elapsed().as_millis();
-
-            if millis >= 1000 {
-                info!("rate: {}/s", cnt);
-                cnt = 0;
-                instant = Instant::now();
-            }
+            let step_instant = Instant::now();
 
             // Send to workers
             let n_examples = examples.len();
@@ -170,37 +165,53 @@ fn main() -> Result<(), Box<Error + Sync + Send>> {
             }
 
             // TODO run optimizer and copy trainable variables accross gpus
+            let first_device = devices[0].clone();
 
-            // let GqnModelOutput {
-            //     elbo_loss,
-            //     target_mse,
-            //     means_target,
-            //     stds_target,
-            //     target_sample,
-            //     canvases,
-            //     means_inf,
-            //     stds_inf,
-            //     means_gen,
-            //     stds_gen,
-            // };
+            let total_batch_size: i64 = resps.iter()
+                .map(|resp| resp.means_target.size()[0])
+                .sum();
 
-            // opt.backward_step(&elbo_loss);
-            // info!("step: {}\telbo_loss: {}", step, elbo_loss.double_value(&[]));
+            let elbo_loss: Tensor = resps.iter()
+                .map(|resp| {
+                    let batch_size = resp.means_target.size()[0];
+                    resp.elbo_loss.to_device(first_device) * batch_size
+                })
+                .sum::<Tensor>() / total_batch_size;
 
+            let target_mse: Tensor = resps.iter()
+                .map(|resp| {
+                    let batch_size = resp.means_target.size()[0];
+                    resp.target_mse.to_device(first_device) * batch_size
+                })
+                .sum::<Tensor>() / total_batch_size;
 
-            // if let Some(path) = model_file {
-            //     if step % save_steps == 0 {
-            //         vs.save(path)?;
-            //     }
-            // }
+            // let means_target: Tensor = Tensor::cat(
+            //     &resps.iter()
+            //         .map(|resp| resp.means_target.to_device(first_device))
+            //         .collect::<Vec<_>>(),
+            //     0,
+            // );
 
-            // let mut opts = vec![];
-            // for vs in &var_stores {
-            //     let opt = nn::Adam::default().build(&vs, 1e-3)?;
+            // Backward step
+            opt.backward_step(&elbo_loss);
+            // TODO copy varaibles over GPUs
 
-            //     models.push(model);
-            //     opts.push(opt);
-            // }
+            info!(
+                "step: {}\tglobal_elapsed: {}s\tstep_elapsed: {}ms\telbo_loss: {}\ttarget_mse: {}",
+                step,
+                global_instant.elapsed().as_secs(),
+                step_instant.elapsed().as_millis(),
+                elbo_loss.double_value(&[]),
+                target_mse.double_value(&[]),
+            );
+
+            // Save model params
+            if let Some(path) = model_file {
+                if step % save_steps == 0 {
+                    let vs = &var_stores[0];
+                    vs.save(path).unwrap();
+                }
+            }
         }
 
         // Gracefully terminate workers
