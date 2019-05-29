@@ -16,6 +16,8 @@ extern crate tfrecord_rs;
 extern crate par_map;
 #[macro_use] extern crate itertools;
 extern crate crossbeam;
+extern crate ctrlc;
+#[macro_use] extern crate lazy_static;
 
 mod dist;
 mod model;
@@ -26,7 +28,9 @@ mod dataset;
 mod rnn;
 mod objective;
 
+use std::fmt::Debug;
 use std::any::Any;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 use std::error::Error;
 use std::path::Path;
@@ -37,8 +41,20 @@ use tfrecord_rs::ExampleType;
 use crate::encoder::TowerEncoder;
 use crate::model::{GqnModel, GqnModelOutput};
 
+lazy_static! {
+    static ref SHUTDOWN_FLAG: AtomicBool = AtomicBool::new(false);
+}
+
 fn main() -> Result<(), Box<Error + Sync + Send>> {
     pretty_env_logger::init();
+
+    // Set signal handler
+    // let mut flag_shutdown: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
+
+    ctrlc::set_handler(|| {
+        warn!("Interrupted by user");
+        SHUTDOWN_FLAG.store(true, Ordering::SeqCst);
+    })?;
 
     // Parse arguments
     let arg_yaml = load_yaml!("args.yml");
@@ -115,7 +131,7 @@ fn main() -> Result<(), Box<Error + Sync + Send>> {
     // Init optimizer
     let opt = nn::Adam::default().build(&var_stores[0], 1e-3)?;
 
-    crossbeam::scope(|scope| {
+    crossbeam::scope(|scope| -> Result<(), Box<dyn Error>> {
         // Spawn train workers
         let mut req_senders = vec![];
         let (resp_sender, resp_receiver) = bounded(num_gpus);
@@ -125,42 +141,62 @@ fn main() -> Result<(), Box<Error + Sync + Send>> {
             let resp_sender_worker = resp_sender.clone();
             let vs = &var_stores[n];
 
-            scope.spawn(move |_| {
-                // Init model
-                let root = vs.root();
-                let model = GqnModel::<TowerEncoder>::new(&root);
+            scope.builder()
+                .name(format!("train_worker-{}", n))
+                .spawn(move |_| {
+                    // Init model
+                    let root = vs.root();
+                    let model = GqnModel::<TowerEncoder>::new(&root);
 
-                loop {
-                    let (step, example) = match req_receiver.recv().unwrap() {
-                        Some(req) => req,
-                        None => return,
-                    };
+                    loop {
+                        let (step, example) = match req_receiver.recv() {
+                            Ok(Some(req)) => req,
+                            Ok(None) => {
+                                info!("Worker {} finished", n);
+                                return;
+                            },
+                            Err(err) => {
+                                error!("Worker {} failed: {:?}", n, err);
+                                return;
+                            }
+                        };
 
-                    let ret = run_model(&model, example, step);
-                    resp_sender_worker.send(ret).unwrap();
-                }
-            });
+                        let ret = run_model(&model, example, step);
+                        match resp_sender_worker.send(ret) {
+                            Err(err) => {
+                                error!("Worker {} failed: {:?}", n, err);
+                                return;
+                            }
+                            _ => {},
+                        }
+                    }
+                })?;
 
             req_senders.push(req_sender);
         }
 
         // Produce train examples
+        let mut train_iter = gqn_dataset.train_iter.enumerate();
         let global_instant = Instant::now();
 
-        for (step, examples) in gqn_dataset.train_iter.enumerate() {
+        while !SHUTDOWN_FLAG.load(Ordering::SeqCst) {
+            let (step, examples) = match train_iter.next() {
+                Some(ret) => ret,
+                None => break,
+            };
+
             let step_instant = Instant::now();
 
             // Send to workers
             let n_examples = examples.len();
-            req_senders.iter().zip(examples.into_iter())
-                .for_each(|(sender, example)| {
-                    sender.send(Some((step as i64, example))).unwrap();
-                });
+            for (sender, example) in req_senders.iter().zip(examples.into_iter()) {
+                sender.send(Some((step as i64, example)))?;
+            }
 
             // Receive from workers
             let mut resps = vec![];
             while resps.len() < n_examples {
-                let output = resp_receiver.recv().unwrap();
+                let output = resp_receiver.recv()?;
                 resps.push(output);
             }
 
@@ -209,18 +245,19 @@ fn main() -> Result<(), Box<Error + Sync + Send>> {
             if let Some(path) = model_file {
                 if step % save_steps == 0 {
                     let vs = &var_stores[0];
-                    vs.save(path).unwrap();
+                    vs.save(path)?;
                 }
             }
         }
 
         // Gracefully terminate workers
-        req_senders.into_iter()
-            .for_each(|sender| {
-                sender.send(None).unwrap();
-            });
+        for (n, sender) in req_senders.into_iter().enumerate() {
+            info!("Terminating train_worker-{}", n);
+            sender.send(None)?;
+        }
 
-    }).unwrap();
+        Ok(())
+    }).unwrap().unwrap();
 
     Ok(())
 }
