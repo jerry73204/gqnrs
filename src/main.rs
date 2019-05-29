@@ -28,14 +28,12 @@ mod dataset;
 mod rnn;
 mod objective;
 
-use std::fmt::Debug;
-use std::any::Any;
+use std::sync::{RwLock, Arc, Barrier};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 use std::error::Error;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use tch::{nn, nn::OptimizerConfig, Device, Tensor};
-use par_map::ParMap;
 use crossbeam::channel::bounded;
 use tfrecord_rs::ExampleType;
 use crate::encoder::TowerEncoder;
@@ -45,12 +43,20 @@ lazy_static! {
     static ref SHUTDOWN_FLAG: AtomicBool = AtomicBool::new(false);
 }
 
+enum WorkerAction where
+{
+    Forward((i64, ExampleType)),
+    Backward(Tensor),
+    CopyParams,
+    LoadParams(PathBuf),
+    SaveParams(PathBuf),
+    Terminate,
+}
+
 fn main() -> Result<(), Box<Error + Sync + Send>> {
     pretty_env_logger::init();
 
     // Set signal handler
-    // let mut flag_shutdown: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
-
     ctrlc::set_handler(|| {
         warn!("Interrupted by user");
         SHUTDOWN_FLAG.store(true, Ordering::SeqCst);
@@ -80,7 +86,7 @@ fn main() -> Result<(), Box<Error + Sync + Send>> {
             assert!(batch_size > 0);
             batch_size
         }
-        None => 3,
+        None => 4,
     };
     let num_gpus: usize = match arg_matches.value_of("NUM_GPUS") {
         Some(arg) => {
@@ -91,20 +97,12 @@ fn main() -> Result<(), Box<Error + Sync + Send>> {
         None => 1,
     };
 
-    // Init varaible stores
-    let mut devices = vec![];
-    let mut var_stores = vec![];
-
-    for n in 0..num_gpus {
-        let device = Device::Cuda(n);
-        let vs = nn::VarStore::new(device);
-
-        devices.push(device);
-        var_stores.push(vs);
-    }
-
     // Load dataset
     info!("Loading dataset");
+
+    let devices: Vec<_> = (0..num_gpus).into_iter()
+        .map(|n| Device::Cuda(n))
+        .collect();
 
     let gqn_dataset = dataset::DeepMindDataSet::load_dir(
         dataset_name,
@@ -114,65 +112,136 @@ fn main() -> Result<(), Box<Error + Sync + Send>> {
         batch_size,
     )?;
 
-    // Init model
-    info!("Initialize model");
-
-    // Load model params
-    if let Some(path) = model_file {
-        if path.is_file() {
-            info!("Loading model parameters");
-
-            for vs in &mut var_stores {
-                vs.load(path)?;
-            }
-        }
-    }
-
-    // Init optimizer
-    let opt = nn::Adam::default().build(&var_stores[0], 1e-3)?;
-
     crossbeam::scope(|scope| -> Result<(), Box<dyn Error>> {
         // Spawn train workers
         let mut req_senders = vec![];
         let (resp_sender, resp_receiver) = bounded(num_gpus);
+        let (param_senders, param_receivers) = {
+            let mut senders = vec![];
+            let mut receivers = vec![];
+            for dev in &devices[1..] {
+                let (sender, receiver) = bounded(1);
+                senders.push((*dev, sender));
+                receivers.push((*dev, receiver));
+            }
+            (senders, receivers)
+        };
+        let update_barrier = Arc::new(Barrier::new(devices.len()));
 
-        for n in 0..num_gpus {
+        for (worker_id, dev) in devices.iter().enumerate() {
             let (req_sender, req_receiver) = bounded(1);
             let resp_sender_worker = resp_sender.clone();
-            let vs = &var_stores[n];
+            let param_receiver = match worker_id {
+                0 => None,
+                n => {
+                    let (to_dev, receiver) = &param_receivers[n - 1];
+                    assert!(dev == to_dev);
+                    Some(receiver.clone())
+                }
+            };
+            let param_senders_worker = match worker_id {
+                0 => {
+                    let senders: Vec<_> = param_senders.iter()
+                        .map(|(to_dev, sender)| ((*to_dev).clone(), sender.clone()))
+                        .collect();
+                    Some(senders)
+                }
+                _ => None,
+            };
+            let update_barrier_worker = update_barrier.clone();
 
             scope.builder()
-                .name(format!("train_worker-{}", n))
+                .name(format!("train_worker-{}", worker_id))
                 .spawn(move |_| {
+                    // Load model params
+                    let mut vs = nn::VarStore::new(*dev);
+
                     // Init model
-                    let root = vs.root();
-                    let model = GqnModel::<TowerEncoder>::new(&root);
+                    info!("Initialize model on worker {}", worker_id);
+                    let model = {
+                        let root = vs.root();
+                        let model = GqnModel::<TowerEncoder>::new(&root);
+                        model
+                    };
+
+                    // Init optimizer
+                    let opt = match worker_id {
+                        0 => {
+                            let opt = nn::Adam::default().build(&vs, 1e-3).unwrap();
+                            Some(opt)
+                        }
+                        _ => None,
+                    };
 
                     loop {
-                        let (step, example) = match req_receiver.recv() {
-                            Ok(Some(req)) => req,
-                            Ok(None) => {
-                                info!("Worker {} finished", n);
+                        match req_receiver.recv() {
+                            Ok(WorkerAction::Forward((step, example))) => {
+                                info!("Forward pass on worker {}", worker_id);
+                                let ret = run_model(&model, example, step);
+                                match resp_sender_worker.send(ret) {
+                                    Err(err) => {
+                                        error!("Worker {} failed: {:?}", worker_id, err);
+                                        return;
+                                    }
+                                    _ => {},
+                                }
+                            }
+                            Ok(WorkerAction::Backward(elbo_loss)) => {
+                                info!("Backward pass on worker {}", worker_id);
+                                opt.as_ref()
+                                    .unwrap()
+                                    .backward_step(&elbo_loss);
+                            }
+                            Ok(WorkerAction::LoadParams(path)) => {
+                                info!("Load model parameters to worker {}", worker_id);
+                                vs.load(path).unwrap();
+                            }
+                            Ok(WorkerAction::SaveParams(path)) => {
+                                info!("Save model params from worker {}", worker_id);
+                                vs.save(path).unwrap();
+                            }
+                            Ok(WorkerAction::CopyParams) => {
+                                match worker_id {
+                                    0 => {
+                                        info!("Send param copies from worker {}", worker_id);
+                                        let vs_rc = Arc::new(vs);
+                                        for (to_dev, sender) in param_senders_worker.as_ref().unwrap().iter() {
+                                            sender.send(vs_rc.clone()).unwrap();
+                                        }
+                                        update_barrier_worker.wait();
+                                        vs = Arc::try_unwrap(vs_rc).unwrap();
+                                    }
+                                    _ => {
+                                        info!("Update params on worker {}", worker_id);
+                                        {
+                                            let receiver = param_receiver.as_ref().unwrap();
+                                            let from_vs = receiver.recv().unwrap();
+                                            vs.copy_(&from_vs);
+                                        } // This scope makes sures deallocation of from_vs
+                                        update_barrier_worker.wait();
+                                    }
+                                }
+                            },
+                            Ok(WorkerAction::Terminate) => {
+                                info!("Worker {} finished", worker_id);
                                 return;
                             },
                             Err(err) => {
-                                error!("Worker {} failed: {:?}", n, err);
+                                error!("Worker {} failed: {:?}", worker_id, err);
                                 return;
                             }
                         };
-
-                        let ret = run_model(&model, example, step);
-                        match resp_sender_worker.send(ret) {
-                            Err(err) => {
-                                error!("Worker {} failed: {:?}", n, err);
-                                return;
-                            }
-                            _ => {},
-                        }
                     }
                 })?;
 
             req_senders.push(req_sender);
+        }
+
+        // Load model params
+        if let Some(path) = model_file {
+            for sender in req_senders.iter() {
+                sender.send(WorkerAction::LoadParams(path.to_path_buf()))?;
+            }
         }
 
         // Produce train examples
@@ -187,20 +256,19 @@ fn main() -> Result<(), Box<Error + Sync + Send>> {
 
             let step_instant = Instant::now();
 
-            // Send to workers
+            // Send examples to workers
             let n_examples = examples.len();
             for (sender, example) in req_senders.iter().zip(examples.into_iter()) {
-                sender.send(Some((step as i64, example)))?;
+                sender.send(WorkerAction::Forward((step as i64, example)))?;
             }
 
-            // Receive from workers
+            // Receive outputs from workers
             let mut resps = vec![];
             while resps.len() < n_examples {
                 let output = resp_receiver.recv()?;
                 resps.push(output);
             }
 
-            // TODO run optimizer and copy trainable variables accross gpus
             let first_device = devices[0].clone();
 
             let total_batch_size: i64 = resps.iter()
@@ -228,10 +296,7 @@ fn main() -> Result<(), Box<Error + Sync + Send>> {
             //     0,
             // );
 
-            // Backward step
-            opt.backward_step(&elbo_loss);
-            // TODO copy varaibles over GPUs
-
+            // Write output
             info!(
                 "step: {}\tglobal_elapsed: {}s\tstep_elapsed: {}ms\telbo_loss: {}\ttarget_mse: {}",
                 step,
@@ -241,11 +306,18 @@ fn main() -> Result<(), Box<Error + Sync + Send>> {
                 target_mse.double_value(&[]),
             );
 
+            // Backward step
+            req_senders[0].send(WorkerAction::Backward(elbo_loss))?;
+
+            // let workers update params
+            for sender in req_senders.iter() {
+                sender.send(WorkerAction::CopyParams)?;
+            }
+
             // Save model params
             if let Some(path) = model_file {
                 if step % save_steps == 0 {
-                    let vs = &var_stores[0];
-                    vs.save(path)?;
+                    req_senders[0].send(WorkerAction::SaveParams(path.to_path_buf()))?;
                 }
             }
         }
@@ -253,7 +325,7 @@ fn main() -> Result<(), Box<Error + Sync + Send>> {
         // Gracefully terminate workers
         for (n, sender) in req_senders.into_iter().enumerate() {
             info!("Terminating train_worker-{}", n);
-            sender.send(None)?;
+            sender.send(WorkerAction::Terminate)?;
         }
 
         Ok(())
