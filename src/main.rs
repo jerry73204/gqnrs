@@ -28,7 +28,7 @@ mod dataset;
 mod rnn;
 mod objective;
 
-use std::sync::{RwLock, Arc, Barrier};
+use std::sync::{Arc, Barrier};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 use std::error::Error;
@@ -157,7 +157,7 @@ fn main() -> Result<(), Box<Error + Sync + Send>> {
                     let mut vs = nn::VarStore::new(*dev);
 
                     // Init model
-                    info!("Initialize model on worker {}", worker_id);
+                    debug!("Initialize model on worker {}", worker_id);
                     let model = {
                         let root = vs.root();
                         let model = GqnModel::<TowerEncoder>::new(&root);
@@ -165,7 +165,7 @@ fn main() -> Result<(), Box<Error + Sync + Send>> {
                     };
 
                     // Init optimizer
-                    let opt = match worker_id {
+                    let mut optimizer_opt = match worker_id {
                         0 => {
                             let opt = nn::Adam::default().build(&vs, 1e-3).unwrap();
                             Some(opt)
@@ -176,7 +176,7 @@ fn main() -> Result<(), Box<Error + Sync + Send>> {
                     loop {
                         match req_receiver.recv() {
                             Ok(WorkerAction::Forward((step, example))) => {
-                                info!("Forward pass on worker {}", worker_id);
+                                debug!("Forward pass on worker {}", worker_id);
                                 let ret = run_model(&model, example, step);
                                 match resp_sender_worker.send(ret) {
                                     Err(err) => {
@@ -187,23 +187,23 @@ fn main() -> Result<(), Box<Error + Sync + Send>> {
                                 }
                             }
                             Ok(WorkerAction::Backward(elbo_loss)) => {
-                                info!("Backward pass on worker {}", worker_id);
-                                opt.as_ref()
-                                    .unwrap()
-                                    .backward_step(&elbo_loss);
+                                debug!("Backward pass on worker {}", worker_id);
+                                let opt = optimizer_opt.as_mut().unwrap();
+                                // TODO lr annealing
+                                opt.backward_step(&elbo_loss);
                             }
                             Ok(WorkerAction::LoadParams(path)) => {
-                                info!("Load model parameters to worker {}", worker_id);
+                                debug!("Load model parameters to worker {}", worker_id);
                                 vs.load(path).unwrap();
                             }
                             Ok(WorkerAction::SaveParams(path)) => {
-                                info!("Save model params from worker {}", worker_id);
+                                debug!("Save model params from worker {}", worker_id);
                                 vs.save(path).unwrap();
                             }
                             Ok(WorkerAction::CopyParams) => {
                                 match worker_id {
                                     0 => {
-                                        info!("Send param copies from worker {}", worker_id);
+                                        debug!("Send param copies from worker {}", worker_id);
                                         let vs_rc = Arc::new(vs);
                                         for (to_dev, sender) in param_senders_worker.as_ref().unwrap().iter() {
                                             sender.send(vs_rc.clone()).unwrap();
@@ -212,18 +212,18 @@ fn main() -> Result<(), Box<Error + Sync + Send>> {
                                         vs = Arc::try_unwrap(vs_rc).unwrap();
                                     }
                                     _ => {
-                                        info!("Update params on worker {}", worker_id);
+                                        debug!("Update params on worker {}", worker_id);
                                         {
                                             let receiver = param_receiver.as_ref().unwrap();
                                             let from_vs = receiver.recv().unwrap();
-                                            vs.copy(&from_vs);
+                                            vs.copy(&from_vs).unwrap();
                                         } // This scope makes sures deallocation of from_vs
                                         update_barrier_worker.wait();
                                     }
                                 }
                             },
                             Ok(WorkerAction::Terminate) => {
-                                info!("Worker {} finished", worker_id);
+                                debug!("Worker {} finished", worker_id);
                                 return;
                             },
                             Err(err) => {
@@ -324,7 +324,7 @@ fn main() -> Result<(), Box<Error + Sync + Send>> {
 
         // Gracefully terminate workers
         for (n, sender) in req_senders.into_iter().enumerate() {
-            info!("Terminating train_worker-{}", n);
+            debug!("Terminating train_worker-{}", n);
             sender.send(WorkerAction::Terminate)?;
         }
 
