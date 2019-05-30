@@ -33,7 +33,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 use std::error::Error;
 use std::path::{Path, PathBuf};
-use tch::{nn, nn::OptimizerConfig, Device, Tensor};
+use tch::{nn, nn::OptimizerConfig, Device, Tensor, Kind};
 use crossbeam::channel::bounded;
 use tfrecord_rs::ExampleType;
 use crate::encoder::TowerEncoder;
@@ -46,7 +46,7 @@ lazy_static! {
 enum WorkerAction where
 {
     Forward((i64, ExampleType)),
-    Backward(Tensor),
+    Backward((i64, Tensor)),
     CopyParams,
     LoadParams(PathBuf),
     SaveParams(PathBuf),
@@ -186,10 +186,12 @@ fn main() -> Result<(), Box<Error + Sync + Send>> {
                                     _ => {},
                                 }
                             }
-                            Ok(WorkerAction::Backward(elbo_loss)) => {
+                            Ok(WorkerAction::Backward((step, elbo_loss))) => {
                                 debug!("Backward pass on worker {}", worker_id);
                                 let opt = optimizer_opt.as_mut().unwrap();
-                                // TODO lr annealing
+                                let lr = utils::ADAM_LR_BETA +
+                                    (utils::ADAM_LR_ALPHA - utils::ADAM_LR_BETA) * (1. - step as f64 / utils::ANNEAL_SIGMA_TAU);
+                                opt.set_lr(lr);
                                 opt.backward_step(&elbo_loss);
                             }
                             Ok(WorkerAction::LoadParams(path)) => {
@@ -310,7 +312,7 @@ fn main() -> Result<(), Box<Error + Sync + Send>> {
             );
 
             // Backward step
-            req_senders[0].send(WorkerAction::Backward(elbo_loss))?;
+            req_senders[0].send(WorkerAction::Backward((step as i64, elbo_loss)))?;
 
             // let workers update params
             for sender in req_senders.iter() {
@@ -326,6 +328,10 @@ fn main() -> Result<(), Box<Error + Sync + Send>> {
         }
 
         // Gracefully terminate workers
+        if let Some(path) = model_file {
+            req_senders[0].send(WorkerAction::SaveParams(path.to_path_buf()))?;
+        }
+
         for (n, sender) in req_senders.into_iter().enumerate() {
             debug!("Terminating train_worker-{}", n);
             sender.send(WorkerAction::Terminate)?;
