@@ -96,7 +96,7 @@ impl<'a> DeepMindDataSet<'a> {
                 .unwrap()
                 .iter()
                 .map(|array| {
-                    array.mapv(|val| val as f32)
+                    array.mapv(|val| val as f32 / 255.)
                         .permuted_axes([2, 0, 1])
                 })
                 .collect::<Vec<_>>();
