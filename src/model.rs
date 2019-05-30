@@ -181,9 +181,8 @@ fn pixel_std_annealing(shape: &[i64], step: i64, device: Device) -> Tensor {
     let sigma_i = utils::GENERATOR_SIGMA_ALPHA;
     let sigma_f = utils::GENERATOR_SIGMA_BETA;
     let anneal_max_step = utils::ANNEAL_SIGMA_TAU;
-    let std = sigma_f + (sigma_i - sigma_f) * (1.0 - step as f64 / anneal_max_step);
+    let std = sigma_f.max(sigma_f + (sigma_i - sigma_f) * (1.0 - step as f64 / anneal_max_step));
 
-    let mut tensor = Tensor::zeros(shape, (Kind::Float, device));
-    tensor.init(nn::Init::Const(std));
-    tensor
+    Tensor::zeros(shape, (Kind::Float, device))
+        .fill_(std)
 }
