@@ -239,8 +239,11 @@ fn main() -> Result<(), Box<Error + Sync + Send>> {
 
         // Load model params
         if let Some(path) = model_file {
-            for sender in req_senders.iter() {
-                sender.send(WorkerAction::LoadParams(path.to_path_buf()))?;
+            if path.is_file() {
+                info!("Load model file {:?}", path);
+                for sender in req_senders.iter() {
+                    sender.send(WorkerAction::LoadParams(path.to_path_buf()))?;
+                }
             }
         }
 
