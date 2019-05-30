@@ -19,7 +19,7 @@ extern crate crossbeam;
 extern crate ctrlc;
 #[macro_use] extern crate lazy_static;
 // extern crate cv;
-extern crate opencv;
+// extern crate opencv;
 
 mod dist;
 mod model;
