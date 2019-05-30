@@ -281,52 +281,96 @@ fn main() -> Result<(), Box<Error + Sync + Send>> {
                 resps.push(output);
             }
 
+            // Helper functions
             let first_device = devices[0].clone();
 
-            let total_batch_size: i64 = resps.iter()
-                .map(|resp| resp.means_target.size()[0])
-                .sum();
+            let combine_mean = |tensors: &[&Tensor]| {
+                Tensor::cat(tensors, 0).mean2(&[], false)
+            };
 
-            let elbo_loss: Tensor = resps.iter()
-                .map(|resp| {
-                    let batch_size = resp.means_target.size()[0];
-                    resp.elbo_loss.to_device(first_device) * batch_size
-                })
-                .sum::<Tensor>() / total_batch_size;
-
-            let target_mse: Tensor = resps.iter()
-                .map(|resp| {
-                    let batch_size = resp.means_target.size()[0];
-                    resp.target_mse.to_device(first_device) * batch_size
-                })
-                .sum::<Tensor>() / total_batch_size;
-
-            if use_gui {
-                let means_target: Tensor = Tensor::cat(
-                    &resps.iter()
-                        .map(|resp| resp.means_target.to_device(first_device))
+            let combine_cat = |tensors: &[&Tensor]| {
+                Tensor::cat(
+                    &tensors.iter()
+                        .map(|tensor| tensor.to_device(first_device))
                         .collect::<Vec<_>>(),
                     0,
-                );
+                )
+            };
 
-                let batch_size = means_target.size()[0];
-                let height = means_target.size()[2];
-                let width = means_target.size()[3];
+            let tensor_to_vec = |tensor: &Tensor| {
+                let buf_size = tensor.numel();
+                let mut buf = vec![0_f32; buf_size as usize];
+                tensor.copy_data(&mut buf, buf_size);
+                buf
+            };
 
-                for batch_idx in 0..batch_size {
-                    let result_image = (means_target.select(0, batch_idx) * 255.)
-                        .permute(&[1, 2, 0])
-                        .to_kind(Kind::Uint8);
+            let elbo_loss = combine_mean(
+                &resps.iter()
+                    .map(|resp| &resp.elbo_loss)
+                    .collect::<Vec<_>>()
+            );
 
-                    let buf_size = result_image.numel()as usize;
-                    let mut buf = vec![0_u8; buf_size];
-                    result_image.copy_data(&mut buf, buf_size as i64);
+            let target_mse = combine_mean(
+                &resps.iter()
+                    .map(|resp| &resp.target_mse)
+                    .collect::<Vec<_>>()
+            );
 
-                    // TODO proper naming
-                    ImageBuffer::<Rgb<u8>, Vec<u8>>::from_vec(width as u32, height as u32, buf).unwrap()
-                        .save("wtf.jpg").unwrap();
-                }
-            }
+            let means_target = combine_cat(
+                &resps.iter()
+                    .map(|resp| &resp.means_target)
+                    .collect::<Vec<_>>()
+            );
+
+            let stds_target = combine_cat(
+                &resps.iter()
+                    .map(|resp| &resp.stds_target)
+                    .collect::<Vec<_>>()
+            );
+
+            let means_inf = combine_cat(
+                &resps.iter()
+                    .map(|resp| &resp.means_inf)
+                    .collect::<Vec<_>>()
+            );
+
+            let stds_inf = combine_cat(
+                &resps.iter()
+                    .map(|resp| &resp.stds_inf)
+                    .collect::<Vec<_>>()
+            );
+
+            let means_gen = combine_cat(
+                &resps.iter()
+                    .map(|resp| &resp.means_gen)
+                    .collect::<Vec<_>>()
+            );
+
+            let stds_gen = combine_cat(
+                &resps.iter()
+                    .map(|resp| &resp.stds_gen)
+                    .collect::<Vec<_>>()
+            );
+
+            // if use_gui {
+            //     let batch_size = means_target.size()[0];
+            //     let height = means_target.size()[2];
+            //     let width = means_target.size()[3];
+
+            //     for batch_idx in 0..batch_size {
+            //         let result_image = (means_target.select(0, batch_idx) * 255.)
+            //             .permute(&[1, 2, 0])
+            //             .to_kind(Kind::Uint8);
+
+            //         let buf_size = result_image.numel()as usize;
+            //         let mut buf = vec![0_u8; buf_size];
+            //         result_image.copy_data(&mut buf, buf_size as i64);
+
+            //         // TODO proper naming
+            //         ImageBuffer::<Rgb<u8>, Vec<u8>>::from_vec(width as u32, height as u32, buf).unwrap()
+            //             .save("wtf.jpg").unwrap();
+            //     }
+            // }
 
             // Write output
             info!(

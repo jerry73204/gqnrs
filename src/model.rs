@@ -150,7 +150,7 @@ impl<E: 'static> GqnModel<E> where
         let target_sample = target_normal.sample();
 
         let target_frame_no_grad = target_frame.set_requires_grad(false);
-        let target_mse = means_target.mse_loss(&target_frame_no_grad, Reduction::Mean);
+        let target_mse = means_target.mse_loss(&target_frame_no_grad, Reduction::None);
 
         let elbo_loss = elbo(
             &means_target,
