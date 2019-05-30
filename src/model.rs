@@ -28,7 +28,7 @@ pub struct GqnModel<E: GqnEncoder> {
 impl<E: 'static> GqnModel<E> where
     E: GqnEncoder,
 {
-    pub fn new(path: &nn::Path) -> GqnModel<E> {
+    pub fn new(path: &nn::Path, image_channels: i64) -> GqnModel<E> {
         let encoder = E::new(
             &(path / "encoder"),
             utils::ENC_CHANNELS,
@@ -45,7 +45,7 @@ impl<E: 'static> GqnModel<E> where
             utils::Z_CHANNELS,
             utils::LSTM_OUTPUT_CHANNELS,
             utils::LSTM_CANVAS_CHANNELS,
-            utils::IMG_CHANNELS,
+            image_channels,
             utils::LSTM_KERNEL_SIZE,
             utils::ETA_INTERNAL_KERNEL_SIZE,
             utils::ETA_EXTERNAL_KERNEL_SIZE,

@@ -111,6 +111,7 @@ fn main() -> Result<(), Box<Error + Sync + Send>> {
         devices.clone(),
         batch_size,
     )?;
+    let frame_channels = gqn_dataset.frame_channels;
 
     crossbeam::scope(|scope| -> Result<(), Box<dyn Error>> {
         // Spawn train workers
@@ -160,7 +161,7 @@ fn main() -> Result<(), Box<Error + Sync + Send>> {
                     debug!("Initialize model on worker {}", worker_id);
                     let model = {
                         let root = vs.root();
-                        let model = GqnModel::<TowerEncoder>::new(&root);
+                        let model = GqnModel::<TowerEncoder>::new(&root, frame_channels);
                         model
                     };
 
@@ -190,7 +191,7 @@ fn main() -> Result<(), Box<Error + Sync + Send>> {
                                 debug!("Backward pass on worker {}", worker_id);
                                 let opt = optimizer_opt.as_mut().unwrap();
                                 let lr = utils::ADAM_LR_BETA +
-                                    (utils::ADAM_LR_ALPHA - utils::ADAM_LR_BETA) * (1. - step as f64 / utils::ANNEAL_SIGMA_TAU);
+                                    (utils::ADAM_LR_ALPHA - utils::ADAM_LR_BETA) * (1. - step as f64 / utils::ANNEAL_LR_TAU);
                                 opt.set_lr(lr);
                                 opt.backward_step(&elbo_loss);
                             }

@@ -21,7 +21,7 @@ pub struct DeepMindDataSet<'a> {
     pub test_size: u64,
     pub frame_size: u64,
     pub sequence_size: u64,
-    pub num_channels: u64,
+    pub frame_channels: i64,
     pub train_iter: Box<Iterator<Item=Vec<ExampleType>> + 'a>,
     pub test_iter: Box<Iterator<Item=Vec<ExampleType>> + 'a>,
 }
@@ -36,7 +36,7 @@ impl<'a> DeepMindDataSet<'a> {
     ) -> Result<DeepMindDataSet<'a>, Box<Error + Sync + Send>> {
         // Load dataset config
         let dataset_spec = &YamlLoader::load_from_str(include_str!("dataset.yaml"))?[0];
-        let num_channels: u64 = dataset_spec["num_channels"].as_i64().unwrap() as u64;
+        let frame_channels: i64 = dataset_spec["num_channels"].as_i64().unwrap();
         let num_camera_params: u64 = dataset_spec["num_camera_params"].as_i64().unwrap() as u64;
         let dataset_info = &dataset_spec["dataset"][name];
         let train_size: u64 = dataset_info["train_size"].as_i64().unwrap() as u64;
@@ -297,7 +297,7 @@ impl<'a> DeepMindDataSet<'a> {
             test_size,
             frame_size,
             sequence_size,
-            num_channels,
+            frame_channels,
             train_iter: Box::new(train_iter),
             test_iter: Box::new(test_iter),
         };
