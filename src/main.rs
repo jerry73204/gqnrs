@@ -18,6 +18,8 @@ extern crate par_map;
 extern crate crossbeam;
 extern crate ctrlc;
 #[macro_use] extern crate lazy_static;
+// extern crate cv;
+extern crate opencv;
 
 mod dist;
 mod model;
@@ -36,6 +38,9 @@ use std::path::{Path, PathBuf};
 use tch::{nn, nn::OptimizerConfig, Device, Tensor, Kind};
 use crossbeam::channel::bounded;
 use tfrecord_rs::ExampleType;
+// use cv::mat::Mat;
+// use cv::highgui::highgui_named_window;
+use image::{Rgb, ImageBuffer};
 use crate::encoder::TowerEncoder;
 use crate::model::{GqnModel, GqnModelOutput};
 
@@ -96,6 +101,7 @@ fn main() -> Result<(), Box<Error + Sync + Send>> {
         }
         None => 1,
     };
+    let use_gui: bool = arg_matches.is_present("USE_GUI");
 
     // Load dataset
     info!("Loading dataset");
@@ -295,12 +301,32 @@ fn main() -> Result<(), Box<Error + Sync + Send>> {
                 })
                 .sum::<Tensor>() / total_batch_size;
 
-            // let means_target: Tensor = Tensor::cat(
-            //     &resps.iter()
-            //         .map(|resp| resp.means_target.to_device(first_device))
-            //         .collect::<Vec<_>>(),
-            //     0,
-            // );
+            if use_gui {
+                let means_target: Tensor = Tensor::cat(
+                    &resps.iter()
+                        .map(|resp| resp.means_target.to_device(first_device))
+                        .collect::<Vec<_>>(),
+                    0,
+                );
+
+                let batch_size = means_target.size()[0];
+                let height = means_target.size()[2];
+                let width = means_target.size()[3];
+
+                for batch_idx in 0..batch_size {
+                    let result_image = (means_target.select(0, batch_idx) * 255.)
+                        .permute(&[1, 2, 0])
+                        .to_kind(Kind::Uint8);
+
+                    let buf_size = result_image.numel()as usize;
+                    let mut buf = vec![0_u8; buf_size];
+                    result_image.copy_data(&mut buf, buf_size as i64);
+
+                    // TODO proper naming
+                    ImageBuffer::<Rgb<u8>, Vec<u8>>::from_vec(width as u32, height as u32, buf).unwrap()
+                        .save("wtf.jpg").unwrap();
+                }
+            }
 
             // Write output
             info!(

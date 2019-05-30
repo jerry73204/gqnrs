@@ -28,3 +28,5 @@ args:
   - NUM_GPUS:
       long: num-gpus
       takes_value: true
+  - USE_GUI:
+      long: gui
