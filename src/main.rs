@@ -88,7 +88,7 @@ fn main() -> Result<(), Box<Error + Sync + Send>> {
             assert!(save_steps > 0);
             save_steps
         },
-        None => 128,
+        None => 100,
     };
     let log_steps: usize = match arg_matches.value_of("LOG_STEPS") {
         Some(steps) => {
@@ -96,7 +96,7 @@ fn main() -> Result<(), Box<Error + Sync + Send>> {
             assert!(log_steps > 0);
             log_steps
         },
-        None => 128,
+        None => 100,
     };
     let batch_size: usize = match arg_matches.value_of("BATCH_SIZE") {
         Some(arg) => {

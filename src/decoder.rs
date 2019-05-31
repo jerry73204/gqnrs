@@ -335,15 +335,15 @@ impl GqnDecoder {
         // Eta function
         let conv_hidden = hidden.apply(conv);
         let means = conv_hidden.narrow(1, 0, self.noise_channels);
-        let raw_stds = conv_hidden.narrow(1, self.noise_channels, self.noise_channels);
-        let stds = (raw_stds + 0.5).softplus() + 1e-8;
+        let stds_input = conv_hidden.narrow(1, self.noise_channels, self.noise_channels);
+        let stds = (stds_input + 0.5).softplus() + 1e-8;
 
         // Compute noise
         let random_source = Tensor::randn(
             &[batch_size, self.noise_channels, hidden_height, hidden_width],
             (Kind::Float, self.device)
         );
-        let noise = &stds * random_source;
+        let noise = &means + &stds * random_source;
 
         (means, stds, noise)
     }
