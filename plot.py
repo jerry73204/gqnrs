@@ -2,6 +2,7 @@
 import os
 import argparse
 import glob
+import time
 
 import torch
 from visdom import Visdom
@@ -26,14 +27,32 @@ def main():
 
     paths = list(glob.glob(os.path.join(args.LOG_DIR, '*.zip')))
     paths.sort()
+    elbo_loss_x = list()
+    elbo_loss_y = list()
+    target_mse_x = list()
+    target_mse_y = list()
 
     for path in paths:
-        log_name = os.path.basename(path)[-4]
+        log_name = os.path.basename(path)[:-4]
+        step, ts = log_name.split('-')
+        step = int(step)
+        ts = int(ts)
         log = torch.jit.load(path, map_location=torch.device('cpu'))
 
-        viz.histogram(
-            X=log.means_gen.view([-1]),
-        )
+        elbo_loss_x.append(step)
+        elbo_loss_y.append(log.elbo_loss)
+
+        target_mse_x.append(step)
+        target_mse_y.append(log.target_mse)
+
+        viz.histogram(X=log.stds_gen.view([-1]))
+        viz.images(log.means_target, opts=dict(title=log_name))
+
+    elbo_loss_y = torch.stack(elbo_loss_y).detach().numpy()
+    viz.line(X=elbo_loss_x, Y=elbo_loss_y)
+
+    target_mse_y = torch.stack(target_mse_y).detach().numpy()
+    viz.line(X=target_mse_x, Y=target_mse_y)
 
 
 if __name__ == '__main__':
