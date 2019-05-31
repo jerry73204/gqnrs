@@ -30,9 +30,10 @@ mod dataset;
 mod rnn;
 mod objective;
 
+use std::fs::create_dir;
 use std::sync::{Arc, Barrier};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Instant;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use std::error::Error;
 use std::path::{Path, PathBuf};
 use tch::{nn, nn::OptimizerConfig, Device, Tensor, Kind};
@@ -77,11 +78,23 @@ fn main() -> Result<(), Box<Error + Sync + Send>> {
         Some(file) => Some(Path::new(file)),
         None => None,
     };
+    let log_dir = match arg_matches.value_of("LOG_DIR") {
+        Some(path) => Some(Path::new(path)),
+        None => None,
+    };
     let save_steps: usize = match arg_matches.value_of("SAVE_STEPS") {
         Some(steps) => {
             let save_steps = steps.parse()?;
             assert!(save_steps > 0);
             save_steps
+        },
+        None => 128,
+    };
+    let log_steps: usize = match arg_matches.value_of("LOG_STEPS") {
+        Some(steps) => {
+            let log_steps = steps.parse()?;
+            assert!(log_steps > 0);
+            log_steps
         },
         None => 128,
     };
@@ -102,6 +115,16 @@ fn main() -> Result<(), Box<Error + Sync + Send>> {
         None => 1,
     };
     let use_gui: bool = arg_matches.is_present("USE_GUI");
+
+    // Init log dir
+    if let Some(path) = log_dir {
+        if path.is_file() {
+            panic!("The specified log dir path {:?} is a file", path);
+        }
+        else if !path.exists() {
+            create_dir(path)?;
+        }
+    }
 
     // Load dataset
     info!("Loading dataset");
@@ -383,7 +406,7 @@ fn main() -> Result<(), Box<Error + Sync + Send>> {
             );
 
             // Backward step
-            req_senders[0].send(WorkerAction::Backward((step as i64, elbo_loss)))?;
+            req_senders[0].send(WorkerAction::Backward((step as i64, elbo_loss.shallow_clone())))?;
 
             // let workers update params
             for sender in req_senders.iter() {
@@ -396,6 +419,36 @@ fn main() -> Result<(), Box<Error + Sync + Send>> {
                     req_senders[0].send(WorkerAction::SaveParams(path.to_path_buf()))?;
                 }
             }
+
+            // Log data
+            if let Some(path) = log_dir {
+                if step % log_steps == 0 {
+                    let sys_time = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)?
+                        .as_millis();
+
+                    let filename = format!("{:0>10}-{:0>13}.zip", step, sys_time);
+                    let file_path = path.join(filename);
+
+                    let data = vec![
+                        ("elbo_loss", elbo_loss),
+                        ("target_mse", target_mse),
+                        ("means_target", means_target),
+                        ("stds_target", stds_target),
+                        ("means_inf", means_inf),
+                        ("stds_inf", stds_inf),
+                        ("means_gen", means_gen),
+                        ("stds_gen", stds_gen),
+                    ];
+
+                    Tensor::save_multi(
+                        &data,
+                        file_path,
+                    )?;
+                }
+            }
+
+
         }
 
         // Gracefully terminate workers
