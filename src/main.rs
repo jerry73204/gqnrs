@@ -36,7 +36,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use std::error::Error;
 use std::path::{Path, PathBuf};
-use tch::{nn, nn::OptimizerConfig, Device, Tensor, Kind};
+use tch::{nn, nn::Init, nn::OptimizerConfig, Device, Tensor, Kind};
 use crossbeam::channel::bounded;
 use tfrecord_rs::ExampleType;
 // use cv::mat::Mat;
@@ -56,8 +56,13 @@ enum WorkerAction where
     Backward((i64, Tensor)),
     CopyParams,
     LoadParams(PathBuf),
-    SaveParams(PathBuf),
+    SaveParams(PathBuf, i64),
     Terminate,
+}
+
+enum WorkerResponse {
+    ForwardOutput(GqnModelOutput),
+    Step(i64),
 }
 
 fn main() -> Result<(), Box<Error + Sync + Send>> {
@@ -83,7 +88,7 @@ fn main() -> Result<(), Box<Error + Sync + Send>> {
         Some(path) => Some(Path::new(path)),
         None => None,
     };
-    let save_steps: usize = match arg_matches.value_of("SAVE_STEPS") {
+    let save_steps: i64 = match arg_matches.value_of("SAVE_STEPS") {
         Some(steps) => {
             let save_steps = steps.parse()?;
             assert!(save_steps > 0);
@@ -91,7 +96,7 @@ fn main() -> Result<(), Box<Error + Sync + Send>> {
         },
         None => 100,
     };
-    let log_steps: usize = match arg_matches.value_of("LOG_STEPS") {
+    let log_steps: i64 = match arg_matches.value_of("LOG_STEPS") {
         Some(steps) => {
             let log_steps = steps.parse()?;
             assert!(log_steps > 0);
@@ -106,6 +111,14 @@ fn main() -> Result<(), Box<Error + Sync + Send>> {
             batch_size
         }
         None => 4,
+    };
+    let initial_step: Option<i64> = match arg_matches.value_of("INIT_STEP") {
+        Some(arg) => {
+            let initial_step = arg.parse()?;
+            assert!(initial_step >= 0);
+            Some(initial_step)
+        }
+        None => None,
     };
     let devices: Vec<Device> = match arg_matches.value_of("DEVICES") {
         Some(arg) => {
@@ -196,6 +209,7 @@ fn main() -> Result<(), Box<Error + Sync + Send>> {
                     let model = {
                         let root = vs.root();
                         let model = GqnModel::<TowerEncoder>::new(&root, frame_channels);
+                        let _ = root.zeros("step", &[]);
                         model
                     };
 
@@ -212,8 +226,9 @@ fn main() -> Result<(), Box<Error + Sync + Send>> {
                         match req_receiver.recv() {
                             Ok(WorkerAction::Forward((step, example))) => {
                                 debug!("Forward pass on worker {}", worker_id);
-                                let ret = run_model(&model, example, step);
-                                match resp_sender_worker.send(ret) {
+                                let output = run_model(&model, example, step);
+                                let resp = WorkerResponse::ForwardOutput(output);
+                                match resp_sender_worker.send(resp) {
                                     Err(err) => {
                                         error!("Worker {} failed: {:?}", worker_id, err);
                                         return;
@@ -232,9 +247,35 @@ fn main() -> Result<(), Box<Error + Sync + Send>> {
                             Ok(WorkerAction::LoadParams(path)) => {
                                 debug!("Load model parameters to worker {}", worker_id);
                                 vs.load(path).unwrap();
+
+                                // Update step variable if necessary
+                                if worker_id == 0 {
+                                    let step = {
+                                        let root = vs.root();
+                                        let step_tensor = root.get("step")
+                                            .unwrap();
+                                        // Uncomment this for backward compatibility
+                                        // let step_tensor = root.entry("step")
+                                        //     .or_zeros(&[]);
+                                        step_tensor.int64_value(&[])
+                                    };
+                                    let resp = WorkerResponse::Step(step);
+                                    match resp_sender_worker.send(resp) {
+                                        Err(err) => {
+                                            error!("Worker {} failed: {:?}", worker_id, err);
+                                            return;
+                                        }
+                                        _ => {},
+                                    }
+                                }
                             }
-                            Ok(WorkerAction::SaveParams(path)) => {
+                            Ok(WorkerAction::SaveParams(path, step)) => {
                                 debug!("Save model params from worker {}", worker_id);
+                                {
+                                    let root = vs.root();
+                                    let mut step_tensor = root.get("step").unwrap();
+                                    tch::no_grad(|| step_tensor.init(Init::Const(step as f64)));
+                                }
                                 vs.save(path).unwrap();
                             }
                             Ok(WorkerAction::CopyParams) => {
@@ -274,6 +315,11 @@ fn main() -> Result<(), Box<Error + Sync + Send>> {
             req_senders.push(req_sender);
         }
 
+        // Produce train examples
+        let mut train_iter = gqn_dataset.train_iter;
+        let global_instant = Instant::now();
+        let mut step = 0;
+
         // Load model params
         if let Some(path) = model_file {
             if path.is_file() {
@@ -281,15 +327,22 @@ fn main() -> Result<(), Box<Error + Sync + Send>> {
                 for sender in req_senders.iter() {
                     sender.send(WorkerAction::LoadParams(path.to_path_buf()))?;
                 }
+
+                // Update step count
+                step = match resp_receiver.recv()? {
+                    WorkerResponse::Step(resp_step) => {
+                        match initial_step {
+                            Some(init_step) => init_step,
+                            None => resp_step,
+                        }
+                    }
+                    _ => panic!("Wrong response type"),
+                }
             }
         }
 
-        // Produce train examples
-        let mut train_iter = gqn_dataset.train_iter.enumerate();
-        let global_instant = Instant::now();
-
         while !SHUTDOWN_FLAG.load(Ordering::SeqCst) {
-            let (step, examples) = match train_iter.next() {
+            let examples = match train_iter.next() {
                 Some(ret) => ret,
                 None => break,
             };
@@ -305,7 +358,10 @@ fn main() -> Result<(), Box<Error + Sync + Send>> {
             // Receive outputs from workers
             let mut resps = vec![];
             while resps.len() < n_examples {
-                let output = resp_receiver.recv()?;
+                let output = match resp_receiver.recv()? {
+                    WorkerResponse::ForwardOutput(output) => output,
+                    _ => panic!("Wrong response type"),
+                };
                 resps.push(output);
             }
 
@@ -423,7 +479,7 @@ fn main() -> Result<(), Box<Error + Sync + Send>> {
             // Save model params
             if let Some(path) = model_file {
                 if step % save_steps == 0 {
-                    req_senders[0].send(WorkerAction::SaveParams(path.to_path_buf()))?;
+                    req_senders[0].send(WorkerAction::SaveParams(path.to_path_buf(), step))?;
                 }
             }
 
@@ -455,12 +511,13 @@ fn main() -> Result<(), Box<Error + Sync + Send>> {
                 }
             }
 
-
+            // Update step
+            step += 1;
         }
 
         // Gracefully terminate workers
         if let Some(path) = model_file {
-            req_senders[0].send(WorkerAction::SaveParams(path.to_path_buf()))?;
+            req_senders[0].send(WorkerAction::SaveParams(path.to_path_buf(), step))?;
         }
 
         for (n, sender) in req_senders.into_iter().enumerate() {

@@ -36,3 +36,6 @@ args:
       takes_value: true
   - USE_GUI:
       long: gui
+  - INIT_STEP:
+      long: initial-step
+      takes_value: true
