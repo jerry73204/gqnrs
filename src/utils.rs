@@ -31,6 +31,6 @@ pub const ANNEAL_SIGMA_TAU: f64 = 200000.0;  // annealing interval for global no
 pub const GENERATOR_SIGMA_ALPHA: f64 = 2.0;  // start value for global generation variance
 pub const GENERATOR_SIGMA_BETA: f64 = 0.7;  // final value for global generation variance
 pub const ANNEAL_LR_TAU: f64 = 1600000.0;  // annealing interval for learning rate
-pub const ADAM_LR_ALPHA: f64 = 5.0 * 10e-5;  // start learning rate of ADAM optimizer; orig.: 5 * 10e-4
-pub const ADAM_LR_BETA: f64 = 5.0 * 10e-6;  // final learning rate of ADAM optimizer; orig.: 5 * 10e-5
+pub const ADAM_LR_ALPHA: f64 = 5.0 * 10e-6;  // start learning rate of ADAM optimizer; orig.: 5 * 10e-4
+pub const ADAM_LR_BETA: f64 = 1.0 * 10e-6;  // final learning rate of ADAM optimizer; orig.: 5 * 10e-5
 

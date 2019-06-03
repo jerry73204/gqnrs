@@ -220,7 +220,7 @@ fn main() -> Result<(), Box<Error + Sync + Send>> {
                                 debug!("Backward pass on worker {}", worker_id);
                                 let opt = optimizer_opt.as_mut().unwrap();
                                 let lr = utils::ADAM_LR_BETA +
-                                    (utils::ADAM_LR_ALPHA - utils::ADAM_LR_BETA) * (1. - (step as f64).max(utils::ANNEAL_LR_TAU) / utils::ANNEAL_LR_TAU);
+                                    (utils::ADAM_LR_ALPHA - utils::ADAM_LR_BETA) * (1. - (step as f64 / utils::ANNEAL_LR_TAU as f64).min(1.));
                                 opt.set_lr(lr);
                                 opt.backward_step(&elbo_loss);
                             }
