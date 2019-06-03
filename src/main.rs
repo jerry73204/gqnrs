@@ -14,10 +14,10 @@ extern crate pretty_env_logger;
 #[macro_use] extern crate ndarray;
 extern crate tfrecord_rs;
 extern crate par_map;
-#[macro_use] extern crate itertools;
 extern crate crossbeam;
 extern crate ctrlc;
 #[macro_use] extern crate lazy_static;
+extern crate regex;
 // extern crate cv;
 // extern crate opencv;
 
@@ -41,6 +41,7 @@ use crossbeam::channel::bounded;
 use tfrecord_rs::ExampleType;
 // use cv::mat::Mat;
 // use cv::highgui::highgui_named_window;
+use regex::Regex;
 use image::{Rgb, ImageBuffer};
 use crate::encoder::TowerEncoder;
 use crate::model::{GqnModel, GqnModelOutput};
@@ -106,13 +107,19 @@ fn main() -> Result<(), Box<Error + Sync + Send>> {
         }
         None => 4,
     };
-    let num_gpus: usize = match arg_matches.value_of("NUM_GPUS") {
+    let devices: Vec<Device> = match arg_matches.value_of("DEVICES") {
         Some(arg) => {
-            let num_gpus = arg.parse()?;
-            assert!(num_gpus > 0);
-            num_gpus
+            let mut devices = vec![];
+            for token in arg.split(",") {
+                let cap = Regex::new(r"cuda\((\d+)\)$")?
+                    .captures(&token)
+                    .unwrap();
+                let dev_index = cap[1].parse()?;
+                devices.push(Device::Cuda(dev_index));
+            }
+            devices
         }
-        None => 1,
+        None => vec![Device::Cuda(0)],
     };
     let use_gui: bool = arg_matches.is_present("USE_GUI");
 
@@ -129,9 +136,7 @@ fn main() -> Result<(), Box<Error + Sync + Send>> {
     // Load dataset
     info!("Loading dataset");
 
-    let devices: Vec<_> = (0..num_gpus).into_iter()
-        .map(|n| Device::Cuda(n))
-        .collect();
+    let num_devices = devices.len();
 
     let gqn_dataset = dataset::DeepMindDataSet::load_dir(
         dataset_name,
@@ -145,7 +150,7 @@ fn main() -> Result<(), Box<Error + Sync + Send>> {
     crossbeam::scope(|scope| -> Result<(), Box<dyn Error>> {
         // Spawn train workers
         let mut req_senders = vec![];
-        let (resp_sender, resp_receiver) = bounded(num_gpus);
+        let (resp_sender, resp_receiver) = bounded(num_devices);
         let (param_senders, param_receivers) = {
             let mut senders = vec![];
             let mut receivers = vec![];
@@ -320,12 +325,12 @@ fn main() -> Result<(), Box<Error + Sync + Send>> {
                 )
             };
 
-            let tensor_to_vec = |tensor: &Tensor| {
-                let buf_size = tensor.numel();
-                let mut buf = vec![0_f32; buf_size as usize];
-                tensor.copy_data(&mut buf, buf_size);
-                buf
-            };
+            // let tensor_to_vec = |tensor: &Tensor| {
+            //     let buf_size = tensor.numel();
+            //     let mut buf = vec![0_f32; buf_size as usize];
+            //     tensor.copy_data(&mut buf, buf_size);
+            //     buf
+            // };
 
             let elbo_loss = combine_mean(
                 &resps.iter()
@@ -406,7 +411,9 @@ fn main() -> Result<(), Box<Error + Sync + Send>> {
             );
 
             // Backward step
-            req_senders[0].send(WorkerAction::Backward((step as i64, elbo_loss.shallow_clone())))?;
+            let mut elbo_loss_grad = resps[0].elbo_loss.shallow_clone();
+            tch::no_grad(|| elbo_loss_grad.copy_(&elbo_loss));
+            req_senders[0].send(WorkerAction::Backward((step as i64, elbo_loss_grad)))?;
 
             // let workers update params
             for sender in req_senders.iter() {

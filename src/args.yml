@@ -31,8 +31,8 @@ args:
   - LOG_STEPS:
       long: log-steps
       takes_value: true
-  - NUM_GPUS:
-      long: num-gpus
+  - DEVICES:
+      long: devices
       takes_value: true
   - USE_GUI:
       long: gui
