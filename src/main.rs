@@ -18,9 +18,6 @@ extern crate crossbeam;
 extern crate ctrlc;
 #[macro_use] extern crate lazy_static;
 extern crate regex;
-extern crate signal_hook;
-// extern crate cv;
-// extern crate opencv;
 
 mod dist;
 mod model;
@@ -40,8 +37,6 @@ use std::path::{Path, PathBuf};
 use tch::{nn, nn::Init, nn::OptimizerConfig, Device, Tensor, Kind};
 use crossbeam::channel::bounded;
 use tfrecord_rs::ExampleType;
-// use cv::mat::Mat;
-// use cv::highgui::highgui_named_window;
 use regex::Regex;
 use image::{Rgb, ImageBuffer};
 use crate::encoder::TowerEncoder;
@@ -75,8 +70,6 @@ fn main() -> Result<(), Box<Error + Sync + Send>> {
         warn!("Interrupted by user");
         SHUTDOWN_FLAG.store(true, Ordering::SeqCst);
     })?;
-
-    signal_hook::flag::register(signal_hook::SIGTERM, Arc::clone(&SIGUSR_FLAG))?;
 
     // Parse arguments
     let arg_yaml = load_yaml!("args.yml");
