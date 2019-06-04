@@ -8,6 +8,7 @@ import torch
 from visdom import Visdom
 
 def main():
+    # Parse arguments
     arg_parser = argparse.ArgumentParser()
     arg_parser.add_argument('LOG_DIR')
     arg_parser.add_argument(
@@ -21,10 +22,12 @@ def main():
     )
     args = arg_parser.parse_args()
 
+    # Connect to Visdom server
     visdom_addr = args.visdom_address
     visdom_port = args.visdom_port
     viz = Visdom(port=visdom_port, server=visdom_addr)
 
+    # Load log data
     paths = list(glob.glob(os.path.join(args.LOG_DIR, '*.zip')))
     paths.sort()
     elbo_loss_x = list()
@@ -45,9 +48,11 @@ def main():
         target_mse_x.append(step)
         target_mse_y.append(log.target_mse)
 
-        viz.histogram(X=log.stds_gen.view([-1]))
-        viz.images(log.means_target, opts=dict(title=log_name))
+        # Uncomment this to plot histogram
+        # viz.histogram(X=log.stds_gen.view([-1]))
+        # viz.images(log.means_target, opts=dict(title=log_name))
 
+    # Plot ELBO loss and target MSE curve
     elbo_loss_y = torch.stack(elbo_loss_y).detach().numpy()
     viz.line(X=elbo_loss_x, Y=elbo_loss_y)
 
