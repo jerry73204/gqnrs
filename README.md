@@ -1,6 +1,8 @@
 # gqnrs
 
-DeepMind's Generative Query Network (GQN) implementation in Rust. It relies on [tch-rs](https://github.com/LaurentMazare/tch-rs), the libtorch binding in Rust, and [tfrecord-rs](https://github.com/jerry73204/tfrecord-rs/tree/master) for data serving. The repo is mainly done by jerry73204 for [NTU NEWSLAB](https://newslabcpsgroupwebsite.wordpress.com/)'s research project.
+DeepMind's [Generative Query Network (GQN)](https://deepmind.com/documents/211/Neural_Scene_Representation_and_Rendering_preprint.pdf) implementation in Rust. It relies on [tch-rs](https://github.com/LaurentMazare/tch-rs), the libtorch binding in Rust, and [tfrecord-rs](https://github.com/jerry73204/tfrecord-rs/tree/master) for data serving. The repo is mainly done by jerry73204 for [NTU NEWSLAB](https://newslabcpsgroupwebsite.wordpress.com/)'s research project.
+
+I take [tf-gqn](https://github.com/ogroth/tf-gqn) as reference implementation, and is not guaranteed to be 100% correct. Feel free to report issues if you find any glitches.
 
 ## Build
 
@@ -25,7 +27,6 @@ The program requires CUDA 9.0 and libtorch to work.
 ### Compile
 
 This is example invocation to build gqnrs executable. We assume unzipped libtorch at `/path/to/libtorch`, and CUDA 9.0 library path `/usr/local/cuda-9.0/lib64`.
-
 
 ```sh
 env LIBTORCH=/path/to/libtorch \
