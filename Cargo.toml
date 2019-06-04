@@ -18,7 +18,7 @@ byteorder = "^1"
 crc = "^1.8"
 rayon = "^1.0"
 log = "^0.4"
-tfrecord-rs = { git = "ssh://git@wtf.csie.org:/srv/git/tfrecord-rs.git", branch = "dev" }
+tfrecord-rs = { git = "https://github.com/jerry73204/tfrecord-rs.git", branch = "master" }
 maplit = "^1.0"
 pretty_env_logger = "^0.3"
 ndarray = "^0.12"
