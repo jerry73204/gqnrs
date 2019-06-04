@@ -18,6 +18,7 @@ extern crate crossbeam;
 extern crate ctrlc;
 #[macro_use] extern crate lazy_static;
 extern crate regex;
+extern crate signal_hook;
 // extern crate cv;
 // extern crate opencv;
 
@@ -48,6 +49,7 @@ use crate::model::{GqnModel, GqnModelOutput};
 
 lazy_static! {
     static ref SHUTDOWN_FLAG: AtomicBool = AtomicBool::new(false);
+    static ref SIGUSR_FLAG: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
 }
 
 enum WorkerAction where
@@ -73,6 +75,8 @@ fn main() -> Result<(), Box<Error + Sync + Send>> {
         warn!("Interrupted by user");
         SHUTDOWN_FLAG.store(true, Ordering::SeqCst);
     })?;
+
+    signal_hook::flag::register(signal_hook::SIGTERM, Arc::clone(&SIGUSR_FLAG))?;
 
     // Parse arguments
     let arg_yaml = load_yaml!("args.yml");
