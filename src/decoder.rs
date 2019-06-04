@@ -1,5 +1,5 @@
 use tch::{nn, Tensor, Kind, Device};
-use crate::utils;
+use crate::params;
 use crate::rnn;
 
 pub struct GqnDecoder {
@@ -352,6 +352,6 @@ impl GqnDecoder {
 
 fn broadcast_poses(poses: &Tensor, height: i64, width: i64) -> Tensor {
     let batch_size = poses.size()[0];
-    poses.reshape(&[batch_size, utils::POSE_CHANNELS, 1, 1])
+    poses.reshape(&[batch_size, params::POSE_CHANNELS, 1, 1])
         .repeat(&[1, 1, height, width])
 }

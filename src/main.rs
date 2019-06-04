@@ -25,7 +25,7 @@ mod dist;
 mod model;
 mod encoder;
 mod decoder;
-mod utils;
+mod params;
 mod dataset;
 mod rnn;
 mod objective;
@@ -239,8 +239,8 @@ fn main() -> Result<(), Box<Error + Sync + Send>> {
                             Ok(WorkerAction::Backward((step, elbo_loss))) => {
                                 debug!("Backward pass on worker {}", worker_id);
                                 let opt = optimizer_opt.as_mut().unwrap();
-                                let lr = utils::ADAM_LR_BETA +
-                                    (utils::ADAM_LR_ALPHA - utils::ADAM_LR_BETA) * (1. - (step as f64 / utils::ANNEAL_LR_TAU as f64).min(1.));
+                                let lr = params::ADAM_LR_BETA +
+                                    (params::ADAM_LR_ALPHA - params::ADAM_LR_BETA) * (1. - (step as f64 / params::ANNEAL_LR_TAU as f64).min(1.));
                                 opt.set_lr(lr);
                                 opt.backward_step(&elbo_loss);
                             }

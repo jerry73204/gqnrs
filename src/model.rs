@@ -2,7 +2,7 @@ use std::any::TypeId;
 use tch::{nn, nn::OptimizerConfig, Tensor, Kind, Device, Reduction};
 use crate::encoder::{GqnEncoder, TowerEncoder, PoolEncoder};
 use crate::decoder::{GqnDecoder, GqnDecoderOutput};
-use crate::utils;
+use crate::params;
 use crate::dist::{Rv, Normal};
 use crate::objective::elbo;
 
@@ -31,24 +31,24 @@ impl<E: 'static> GqnModel<E> where
     pub fn new(path: &nn::Path, image_channels: i64) -> GqnModel<E> {
         let encoder = E::new(
             &(path / "encoder"),
-            utils::ENC_CHANNELS,
-            utils::POSE_CHANNELS,
+            params::ENC_CHANNELS,
+            params::POSE_CHANNELS,
         );
 
         let decoder = GqnDecoder::new(
             &(path / "decoder"),  // path
-            utils::SEQ_LENGTH,  // num layers
+            params::SEQ_LENGTH,  // num layers
             true,               // biases
             true,               // train
-            utils::ENC_CHANNELS,
-            utils::POSE_CHANNELS,
-            utils::Z_CHANNELS,
-            utils::LSTM_OUTPUT_CHANNELS,
-            utils::LSTM_CANVAS_CHANNELS,
+            params::ENC_CHANNELS,
+            params::POSE_CHANNELS,
+            params::Z_CHANNELS,
+            params::LSTM_OUTPUT_CHANNELS,
+            params::LSTM_CANVAS_CHANNELS,
             image_channels,
-            utils::LSTM_KERNEL_SIZE,
-            utils::ETA_INTERNAL_KERNEL_SIZE,
-            utils::ETA_EXTERNAL_KERNEL_SIZE,
+            params::LSTM_KERNEL_SIZE,
+            params::ETA_INTERNAL_KERNEL_SIZE,
+            params::ETA_EXTERNAL_KERNEL_SIZE,
         );
 
         let device = path.device();
@@ -178,9 +178,9 @@ impl<E: 'static> GqnModel<E> where
 }
 
 fn pixel_std_annealing(shape: &[i64], step: i64, device: Device) -> Tensor {
-    let sigma_i = utils::GENERATOR_SIGMA_ALPHA;
-    let sigma_f = utils::GENERATOR_SIGMA_BETA;
-    let anneal_max_step = utils::ANNEAL_SIGMA_TAU;
+    let sigma_i = params::GENERATOR_SIGMA_ALPHA;
+    let sigma_f = params::GENERATOR_SIGMA_BETA;
+    let anneal_max_step = params::ANNEAL_SIGMA_TAU;
     let std = sigma_f.max(sigma_f + (sigma_i - sigma_f) * (1.0 - step as f64 / anneal_max_step));
 
     Tensor::zeros(shape, (Kind::Float, device))
