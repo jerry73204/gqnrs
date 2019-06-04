@@ -70,7 +70,7 @@ env LD_LIBRARY_PATH=/usr/local/cuda-9.0/lib64:/path/to/libtorch/lib \
                         -i /path/to/gqn-dataset/rooms_free_camera_with_object_rotations \
                         --model-file model.zip \
                         --log-dir logs \
-                        --batch-size 2 \
+                        --batch-size 4 \
                         --devices 'cuda(0),cuda(1)' \
                         --save-steps 1000 \
                         --log-steps 100 \
