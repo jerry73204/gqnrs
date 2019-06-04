@@ -134,7 +134,7 @@ fn main() -> Result<(), Box<Error + Sync + Send>> {
         }
         None => vec![Device::Cuda(0)],
     };
-    let use_gui: bool = arg_matches.is_present("USE_GUI");
+    let save_image: bool = arg_matches.is_present("SAVE_IMAGE");
 
     // Init log dir
     if let Some(path) = log_dir {
@@ -436,26 +436,6 @@ fn main() -> Result<(), Box<Error + Sync + Send>> {
                     .collect::<Vec<_>>()
             );
 
-            // if use_gui {
-            //     let batch_size = means_target.size()[0];
-            //     let height = means_target.size()[2];
-            //     let width = means_target.size()[3];
-
-            //     for batch_idx in 0..batch_size {
-            //         let result_image = (means_target.select(0, batch_idx) * 255.)
-            //             .permute(&[1, 2, 0])
-            //             .to_kind(Kind::Uint8);
-
-            //         let buf_size = result_image.numel()as usize;
-            //         let mut buf = vec![0_u8; buf_size];
-            //         result_image.copy_data(&mut buf, buf_size as i64);
-
-            //         // TODO proper naming
-            //         ImageBuffer::<Rgb<u8>, Vec<u8>>::from_vec(width as u32, height as u32, buf).unwrap()
-            //             .save("wtf.jpg").unwrap();
-            //     }
-            // }
-
             // Write output
             info!(
                 "step: {}\tglobal_elapsed: {}s\tstep_elapsed: {}ms\telbo_loss: {}\ttarget_mse: {}",
@@ -486,6 +466,28 @@ fn main() -> Result<(), Box<Error + Sync + Send>> {
             // Log data
             if let Some(path) = log_dir {
                 if step % log_steps == 0 {
+                    // Save images
+                    if save_image {
+                        let batch_size = means_target.size()[0];
+                        let height = means_target.size()[2];
+                        let width = means_target.size()[3];
+
+                        for batch_idx in 0..batch_size {
+                            let result_image = (means_target.select(0, batch_idx) * 255.)
+                                .permute(&[1, 2, 0])
+                                .to_kind(Kind::Uint8);
+
+                            let buf_size = result_image.numel()as usize;
+                            let mut buf = vec![0_u8; buf_size];
+                            result_image.copy_data(&mut buf, buf_size as i64);
+
+                            let filename = format!("{:0>10}-{:0>2}.jpg", step, batch_idx);
+                            ImageBuffer::<Rgb<u8>, Vec<u8>>::from_vec(width as u32, height as u32, buf).unwrap()
+                                .save(path.join(filename)).unwrap();
+                        }
+                    }
+
+                    // Save model outputs
                     let sys_time = SystemTime::now()
                         .duration_since(UNIX_EPOCH)?
                         .as_millis();

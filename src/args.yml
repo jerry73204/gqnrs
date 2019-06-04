@@ -34,8 +34,8 @@ args:
   - DEVICES:
       long: devices
       takes_value: true
-  - USE_GUI:
-      long: gui
+  - SAVE_IMAGE:
+      long: save-image
   - INIT_STEP:
       long: initial-step
       takes_value: true
