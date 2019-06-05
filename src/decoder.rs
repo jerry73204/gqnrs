@@ -232,6 +232,7 @@ impl GqnDecoder {
         let mut means_gen = Vec::new();
         let mut stds_gen = Vec::new();
 
+        // Chain the LSTM cells
         for step in 0..(self.num_layers) {
             // Extract tensors from previous step
             let prev_inf_state = match inf_states.last() {
@@ -312,7 +313,6 @@ impl GqnDecoder {
         let stds_inf_tensor = Tensor::stack(&stds_inf, 1);
         let means_gen_tensor = Tensor::stack(&means_gen, 1);
         let stds_gen_tensor = Tensor::stack(&stds_gen, 1);
-
 
         GqnDecoderOutput {
             means_target,
