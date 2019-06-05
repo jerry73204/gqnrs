@@ -397,6 +397,12 @@ fn main() -> Result<(), Box<Error + Sync + Send>> {
                     .collect::<Vec<_>>()
             );
 
+            let target_sample = combine_cat(
+                &resps.iter()
+                    .map(|resp| &resp.target_sample)
+                    .collect::<Vec<_>>()
+            );
+
             let means_target = combine_cat(
                 &resps.iter()
                     .map(|resp| &resp.means_target)
@@ -433,16 +439,6 @@ fn main() -> Result<(), Box<Error + Sync + Send>> {
                     .collect::<Vec<_>>()
             );
 
-            // Write output
-            info!(
-                "step: {}\tglobal_elapsed: {}s\tstep_elapsed: {}ms\telbo_loss: {}\ttarget_mse: {}",
-                step,
-                global_instant.elapsed().as_secs(),
-                step_instant.elapsed().as_millis(),
-                elbo_loss.double_value(&[]),
-                target_mse.double_value(&[]),
-            );
-
             // Backward step
             let mut elbo_loss_grad = resps[0].elbo_loss.shallow_clone();
             tch::no_grad(|| elbo_loss_grad.copy_(&elbo_loss));
@@ -468,9 +464,12 @@ fn main() -> Result<(), Box<Error + Sync + Send>> {
                         let batch_size = means_target.size()[0];
                         let height = means_target.size()[2];
                         let width = means_target.size()[3];
+                        let mut min_val: Tensor = (255. as f32).into();
+                        min_val = min_val.to_device(first_device);
 
                         for batch_idx in 0..batch_size {
                             let result_image = (means_target.select(0, batch_idx) * 255.)
+                                .min1(&min_val)
                                 .permute(&[1, 2, 0])
                                 .to_kind(Kind::Uint8);
 
@@ -493,8 +492,9 @@ fn main() -> Result<(), Box<Error + Sync + Send>> {
                     let file_path = path.join(filename);
 
                     let data = vec![
-                        ("elbo_loss", elbo_loss),
-                        ("target_mse", target_mse),
+                        ("elbo_loss", elbo_loss.shallow_clone()),
+                        ("target_mse", target_mse.shallow_clone()),
+                        ("target_sample", target_sample),
                         ("means_target", means_target),
                         ("stds_target", stds_target),
                         ("means_inf", means_inf),
@@ -509,6 +509,16 @@ fn main() -> Result<(), Box<Error + Sync + Send>> {
                     )?;
                 }
             }
+
+            // Write output
+            info!(
+                "step: {}\tglobal_elapsed: {}s\tstep_elapsed: {}ms\telbo_loss: {:.3}\ttarget_mse: {:.6}",
+                step,
+                global_instant.elapsed().as_secs(),
+                step_instant.elapsed().as_millis(),
+                elbo_loss.double_value(&[]),
+                target_mse.double_value(&[]),
+            );
 
             // Update step
             step += 1;
