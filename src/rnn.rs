@@ -1,3 +1,4 @@
+use std::borrow::Borrow;
 use tch::{nn, Device, Tensor, Kind};
 
 pub struct GqnLSTMState {
@@ -17,8 +18,8 @@ pub struct GqnLSTM {
 }
 
 impl GqnLSTM {
-    pub fn new(
-        vs: &nn::Path,
+    pub fn new<'a, P: Borrow<nn::Path<'a>>>(
+        path: P,
         biases: bool,
         train: bool,
         in_channels: i64,
@@ -27,6 +28,8 @@ impl GqnLSTM {
         forget_bias: f64,
     ) -> GqnLSTM
     {
+        let pathb = path.borrow();
+
         let hidden_channels = 4 * out_channels;
         let conv_config = nn::ConvConfig {
             stride: 1,
@@ -36,20 +39,20 @@ impl GqnLSTM {
         };
 
         let conv_ih = nn::conv2d(
-            vs / "conv_ih",
+            pathb / "conv_ih",
             in_channels,
             hidden_channels,
             kernel_size,
             conv_config,
         );
         let conv_hh = nn::conv2d(
-            vs / "conv_hh",
+            pathb / "conv_hh",
             out_channels,
             hidden_channels,
             kernel_size,
             conv_config,
         );
-        let device = vs.device();
+        let device = pathb.device();
 
         GqnLSTM {
             biases,

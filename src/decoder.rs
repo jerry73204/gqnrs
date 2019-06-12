@@ -1,3 +1,4 @@
+use std::borrow::Borrow;
 use tch::{nn, Tensor, Kind, Device};
 use crate::params;
 use crate::rnn;
@@ -41,8 +42,8 @@ pub struct GqnDecoderOutput {
 }
 
 impl GqnDecoder {
-    pub fn new(
-        path: &nn::Path,
+    pub fn new<'a, P: Borrow<nn::Path<'a>>>(
+        path: P,
         // model params
         num_layers: i64,
         biases: bool,
@@ -60,6 +61,8 @@ impl GqnDecoder {
         target_kernel_size: i64,
 
     ) -> GqnDecoder {
+        let pathb = path.borrow();
+
         let canvas_conv_input_channels = target_channels + canvas_channels;
         let gen_input_channels = repr_channels + poses_channels + noise_channels;
         let inf_input_channels = repr_channels + poses_channels + cell_output_channels;
@@ -74,7 +77,7 @@ impl GqnDecoder {
         for step in 0..num_layers {
             // noise part
             let inf_noise_conv = nn::conv2d(
-                path / &format!("inf_noise_conv_{}", step),
+                pathb / &format!("inf_noise_conv_{}", step),
                 cell_output_channels,
                 2 * noise_channels,
                 cell_kernel_size,
@@ -86,7 +89,7 @@ impl GqnDecoder {
             );
 
             let gen_noise_conv = nn::conv2d(
-                path / &format!("gen_noise_conv_{}", step),
+                pathb / &format!("gen_noise_conv_{}", step),
                 cell_output_channels,
                 2 * noise_channels,
                 cell_kernel_size,
@@ -99,7 +102,7 @@ impl GqnDecoder {
 
             // generator part
             let gen_lstm = rnn::GqnLSTM::new(
-                &(path / &format!("generator_lstm_{}", step)),
+                pathb / &format!("generator_lstm_{}", step),
                 biases,
                 train,
                 gen_input_channels,
@@ -109,7 +112,7 @@ impl GqnDecoder {
             );
 
             let dconv = nn::conv_transpose2d(
-                path / &format!("canvas_dconv_{}", step),
+                pathb / &format!("canvas_dconv_{}", step),
                 cell_output_channels,
                 canvas_channels,
                 canvas_kernel_size,
@@ -121,7 +124,7 @@ impl GqnDecoder {
 
             // inference part
             let inf_lstm = rnn::GqnLSTM::new(
-                &(path / &format!("inference_lstm_{}", step)),
+                pathb / &format!("inference_lstm_{}", step),
                 biases,
                 train,
                 inf_input_channels,
@@ -131,7 +134,7 @@ impl GqnDecoder {
             );
 
             let conv = nn::conv2d(
-                path / &format!("canvas_conv_{}", step),
+                pathb / &format!("canvas_conv_{}", step),
                 canvas_conv_input_channels,
                 cell_output_channels,
                 canvas_kernel_size,
@@ -152,7 +155,7 @@ impl GqnDecoder {
         }
 
         let target_conv = nn::conv2d(
-            path / "target_conv",
+            pathb / "target_conv",
             canvas_channels,
             target_channels,
             target_kernel_size,
@@ -167,7 +170,7 @@ impl GqnDecoder {
             num_layers,
             biases,
             train,
-            device: path.device(),
+            device: pathb.device(),
 
             repr_channels,
             poses_channels,
