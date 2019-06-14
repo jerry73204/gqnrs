@@ -1,16 +1,11 @@
-use std::io;
-use std::any::Any;
-use std::error::Error;
 use std::path;
-use std::time::Instant;
-use std::collections::HashMap;
-// use glob::glob;
 use yaml_rust::YamlLoader;
 use tch::{Tensor, Device};
 use ndarray::{ArrayBase, Array2, Array3, Axis};
 use par_map::ParMap;
 use itertools::Itertools;
-use tfrecord_rs::{ExampleType, ErrorType};
+use failure::Fallible;
+use tfrecord_rs::ExampleType;
 use tfrecord_rs::iter::DsIterator;
 use tfrecord_rs::loader::{LoaderOptions, LoaderMethod, Loader, IndexedLoader};
 use tfrecord_rs::utils::{bytes_to_example, decode_image_on_example, example_to_torch_tensor, make_batch};
@@ -33,7 +28,7 @@ impl<'a> DeepMindDataSet<'a> {
         check_integrity: bool,
         devices: Vec<Device>,
         batch_size: usize,
-    ) -> Result<DeepMindDataSet<'a>, Box<Error + Sync + Send>> {
+    ) -> Fallible<DeepMindDataSet<'a>> {
         // Load dataset config
         let dataset_spec = &YamlLoader::load_from_str(include_str!("dataset.yaml"))?[0];
         let frame_channels: i64 = dataset_spec["num_channels"].as_i64().unwrap();
