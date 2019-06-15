@@ -340,6 +340,7 @@ fn main() -> Fallible<()> {
         }
     }
 
+    // Main loop
     while !SHUTDOWN_FLAG.load(Ordering::SeqCst) {
         let examples = match train_iter.next() {
             Some(ret) => ret,
@@ -355,95 +356,21 @@ fn main() -> Fallible<()> {
         }
 
         // Receive outputs from workers
-        let mut resps = vec![];
-        while resps.len() < n_examples {
+        let mut outputs = vec![];
+        while outputs.len() < n_examples {
             let output = match resp_receiver.recv()? {
                 WorkerResponse::ForwardOutput(output) => output,
                 _ => panic!("Wrong response type"),
             };
-            resps.push(output);
+            outputs.push(output);
         }
 
-        // Helper functions
-        let first_device = devices[0].clone();
-
-        let combine_mean = |tensors: &[&Tensor]| {
-            Tensor::cat(tensors, 0).mean2(&[], false)
-        };
-
-        let combine_cat = |tensors: &[&Tensor]| {
-            Tensor::cat(
-                &tensors.iter()
-                    .map(|tensor| tensor.to_device(first_device))
-                    .collect::<Vec<_>>(),
-                0,
-            )
-        };
-
-        // let tensor_to_vec = |tensor: &Tensor| {
-        //     let buf_size = tensor.numel();
-        //     let mut buf = vec![0_f32; buf_size as usize];
-        //     tensor.copy_data(&mut buf, buf_size);
-        //     buf
-        // };
-
-        let elbo_loss = combine_mean(
-            &resps.iter()
-                .map(|resp| &resp.elbo_loss)
-                .collect::<Vec<_>>()
-        );
-
-        let target_mse = combine_mean(
-            &resps.iter()
-                .map(|resp| &resp.target_mse)
-                .collect::<Vec<_>>()
-        );
-
-        let target_sample = combine_cat(
-            &resps.iter()
-                .map(|resp| &resp.target_sample)
-                .collect::<Vec<_>>()
-        );
-
-        let means_target = combine_cat(
-            &resps.iter()
-                .map(|resp| &resp.means_target)
-                .collect::<Vec<_>>()
-        );
-
-        let stds_target = combine_cat(
-            &resps.iter()
-                .map(|resp| &resp.stds_target)
-                .collect::<Vec<_>>()
-        );
-
-        let means_inf = combine_cat(
-            &resps.iter()
-                .map(|resp| &resp.means_inf)
-                .collect::<Vec<_>>()
-        );
-
-        let stds_inf = combine_cat(
-            &resps.iter()
-                .map(|resp| &resp.stds_inf)
-                .collect::<Vec<_>>()
-        );
-
-        let means_gen = combine_cat(
-            &resps.iter()
-                .map(|resp| &resp.means_gen)
-                .collect::<Vec<_>>()
-        );
-
-        let stds_gen = combine_cat(
-            &resps.iter()
-                .map(|resp| &resp.stds_gen)
-                .collect::<Vec<_>>()
-        );
+        // combine model outputs
+        let mut elbo_loss_grad = outputs[0].elbo_loss.shallow_clone();
+        let combined = combine_gqn_outputs(outputs, devices[0]);
 
         // Backward step
-        let mut elbo_loss_grad = resps[0].elbo_loss.shallow_clone();
-        tch::no_grad(|| elbo_loss_grad.copy_(&elbo_loss));
+        tch::no_grad(|| elbo_loss_grad.copy_(&combined.elbo_loss));
         req_senders[0].send(WorkerAction::Backward((step as i64, elbo_loss_grad))).unwrap();
 
         // let workers update params
@@ -463,52 +390,11 @@ fn main() -> Fallible<()> {
             if step % log_steps == 0 {
                 // Save images
                 if save_image {
-                    let batch_size = means_target.size()[0];
-                    let height = means_target.size()[2];
-                    let width = means_target.size()[3];
-                    let mut min_val: Tensor = (255. as f32).into();
-                    min_val = min_val.to_device(first_device);
-
-                    for batch_idx in 0..batch_size {
-                        let result_image = (means_target.select(0, batch_idx) * 255.)
-                            .min1(&min_val)
-                            .permute(&[1, 2, 0])
-                            .to_kind(Kind::Uint8);
-
-                        let buf_size = result_image.numel()as usize;
-                        let mut buf = vec![0_u8; buf_size];
-                        result_image.copy_data(&mut buf, buf_size as i64);
-
-                        let filename = format!("{:0>10}-{:0>2}.jpg", step, batch_idx);
-                        ImageBuffer::<Rgb<u8>, Vec<u8>>::from_vec(width as u32, height as u32, buf).unwrap()
-                            .save(path.join(filename)).unwrap();
-                    }
+                    save_images(step, &combined, path);
                 }
 
                 // Save model outputs
-                let sys_time = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)?
-                    .as_millis();
-
-                let filename = format!("{:0>10}-{:0>13}.zip", step, sys_time);
-                let file_path = path.join(filename);
-
-                let data = vec![
-                    ("elbo_loss", elbo_loss.shallow_clone()),
-                    ("target_mse", target_mse.shallow_clone()),
-                    ("target_sample", target_sample),
-                    ("means_target", means_target),
-                    ("stds_target", stds_target),
-                    ("means_inf", means_inf),
-                    ("stds_inf", stds_inf),
-                    ("means_gen", means_gen),
-                    ("stds_gen", stds_gen),
-                ];
-
-                Tensor::save_multi(
-                    &data,
-                    file_path,
-                )?;
+                save_model_outputs(step, &combined, path)?;
             }
         }
 
@@ -518,8 +404,8 @@ fn main() -> Fallible<()> {
             step,
             global_instant.elapsed().as_secs(),
             step_instant.elapsed().as_millis(),
-            elbo_loss.double_value(&[]),
-            target_mse.double_value(&[]),
+            combined.elbo_loss.double_value(&[]),
+            combined.target_mse.double_value(&[]),
         );
 
         // Update step
@@ -535,6 +421,155 @@ fn main() -> Fallible<()> {
         debug!("Terminating train_worker-{}", n);
         sender.send(WorkerAction::Terminate).unwrap();
     }
+
+    Ok(())
+}
+
+fn combine_gqn_outputs(outputs: Vec<GqnModelOutput>, target_device: Device) -> GqnModelOutput {
+    let combine_cat = |tensors: &[&Tensor]| {
+        Tensor::cat(
+            &tensors.iter()
+                .map(|tensor| tensor.to_device(target_device))
+                .collect::<Vec<_>>(),
+            0,
+        )
+    };
+
+    let combine_mean = |tensors: &[&Tensor]| {
+        combine_cat(tensors).mean2(&[], false)
+    };
+
+    // let tensor_to_vec = |tensor: &Tensor| {
+    //     let buf_size = tensor.numel();
+    //     let mut buf = vec![0_f32; buf_size as usize];
+    //     tensor.copy_data(&mut buf, buf_size);
+    //     buf
+    // };
+
+    let elbo_loss = combine_mean(
+        &outputs.iter()
+            .map(|resp| &resp.elbo_loss)
+            .collect::<Vec<_>>()
+    );
+
+    let target_mse = combine_mean(
+        &outputs.iter()
+            .map(|resp| &resp.target_mse)
+            .collect::<Vec<_>>()
+    );
+
+    let canvases = combine_cat(
+        &outputs.iter()
+            .map(|resp| &resp.canvases)
+            .collect::<Vec<_>>()
+    );
+
+    let target_sample = combine_cat(
+        &outputs.iter()
+            .map(|resp| &resp.target_sample)
+            .collect::<Vec<_>>()
+    );
+
+    let means_target = combine_cat(
+        &outputs.iter()
+            .map(|resp| &resp.means_target)
+            .collect::<Vec<_>>()
+    );
+
+    let stds_target = combine_cat(
+        &outputs.iter()
+            .map(|resp| &resp.stds_target)
+            .collect::<Vec<_>>()
+    );
+
+    let means_inf = combine_cat(
+        &outputs.iter()
+            .map(|resp| &resp.means_inf)
+            .collect::<Vec<_>>()
+    );
+
+    let stds_inf = combine_cat(
+        &outputs.iter()
+            .map(|resp| &resp.stds_inf)
+            .collect::<Vec<_>>()
+    );
+
+    let means_gen = combine_cat(
+        &outputs.iter()
+            .map(|resp| &resp.means_gen)
+            .collect::<Vec<_>>()
+    );
+
+    let stds_gen = combine_cat(
+        &outputs.iter()
+            .map(|resp| &resp.stds_gen)
+            .collect::<Vec<_>>()
+    );
+
+    GqnModelOutput {
+        elbo_loss,
+        target_mse,
+        target_sample,
+        means_target,
+        stds_target,
+        canvases,
+        means_inf,
+        stds_inf,
+        means_gen,
+        stds_gen,
+    }
+}
+
+fn save_images<P: AsRef<Path>>(step: i64, combined: &GqnModelOutput, log_dir: P) {
+    let size = combined.means_target.size();
+    let batch_size = size[0];
+    let height = size[2];
+    let width = size[3];
+
+    let min_val: Tensor = 255_f32.into();
+    let min_val =  min_val.to_device(combined.means_target.device());
+
+    for batch_idx in 0..batch_size {
+        let result_image = (combined.means_target.select(0, batch_idx) * 255.)
+            .min1(&min_val)
+            .permute(&[1, 2, 0])
+            .to_kind(Kind::Uint8);
+
+        let buf_size = result_image.numel()as usize;
+        let mut buf = vec![0_u8; buf_size];
+        result_image.copy_data(&mut buf, buf_size as i64);
+
+        let filename = format!("{:0>10}-{:0>2}.jpg", step, batch_idx);
+        ImageBuffer::<Rgb<u8>, Vec<u8>>::from_vec(width as u32, height as u32, buf).unwrap()
+            .save(log_dir.as_ref().join(filename)).unwrap();
+    }
+
+}
+
+fn save_model_outputs<P: AsRef<Path>>(step: i64, combined: &GqnModelOutput, log_dir: P) -> Fallible<()> {
+    let sys_time = SystemTime::now()
+        .duration_since(UNIX_EPOCH)?
+        .as_millis();
+
+    let filename = format!("{:0>10}-{:0>13}.zip", step, sys_time);
+    let file_path = log_dir.as_ref().join(filename);
+
+    let data = vec![
+        ("elbo_loss", combined.elbo_loss.shallow_clone()),
+        ("target_mse", combined.target_mse.shallow_clone()),
+        ("target_sample", combined.target_sample.shallow_clone()),
+        ("means_target", combined.means_target.shallow_clone()),
+        ("stds_target", combined.stds_target.shallow_clone()),
+        ("means_inf", combined.means_inf.shallow_clone()),
+        ("stds_inf", combined.stds_inf.shallow_clone()),
+        ("means_gen", combined.means_gen.shallow_clone()),
+        ("stds_gen", combined.stds_gen.shallow_clone()),
+    ];
+
+    Tensor::save_multi(
+        &data,
+        file_path,
+    )?;
 
     Ok(())
 }
