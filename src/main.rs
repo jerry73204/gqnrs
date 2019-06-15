@@ -49,6 +49,19 @@ lazy_static! {
     static ref SIGUSR_FLAG: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
 }
 
+struct Args {
+    dataset_name: String,
+    input_dir: PathBuf,
+    model_file: Option<PathBuf>,
+    log_dir: Option<PathBuf>,
+    save_steps: i64,
+    log_steps: i64,
+    batch_size: usize,
+    initial_step: Option<i64>,
+    devices: Vec<Device>,
+    save_images: bool,
+}
+
 enum WorkerAction where
 {
     Forward((i64, ExampleType)),
@@ -74,69 +87,10 @@ fn main() -> Fallible<()> {
     })?;
 
     // Parse arguments
-    let arg_yaml = load_yaml!("args.yml");
-    let arg_matches = clap::App::from_yaml(arg_yaml).get_matches();
-
-    let dataset_name = arg_matches.value_of("DATASET_NAME").unwrap();
-    let input_dir = Path::new(arg_matches.value_of("INPUT_DIR").unwrap());
-    let model_file = match arg_matches.value_of("MODEL_FILE") {
-        Some(file) => Some(Path::new(file)),
-        None => None,
-    };
-    let log_dir = match arg_matches.value_of("LOG_DIR") {
-        Some(path) => Some(Path::new(path)),
-        None => None,
-    };
-    let save_steps: i64 = match arg_matches.value_of("SAVE_STEPS") {
-        Some(steps) => {
-            let save_steps = steps.parse()?;
-            assert!(save_steps > 0);
-            save_steps
-        },
-        None => 100,
-    };
-    let log_steps: i64 = match arg_matches.value_of("LOG_STEPS") {
-        Some(steps) => {
-            let log_steps = steps.parse()?;
-            assert!(log_steps > 0);
-            log_steps
-        },
-        None => 100,
-    };
-    let batch_size: usize = match arg_matches.value_of("BATCH_SIZE") {
-        Some(arg) => {
-            let batch_size = arg.parse()?;
-            assert!(batch_size > 0);
-            batch_size
-        }
-        None => 4,
-    };
-    let initial_step: Option<i64> = match arg_matches.value_of("INIT_STEP") {
-        Some(arg) => {
-            let initial_step = arg.parse()?;
-            assert!(initial_step >= 0);
-            Some(initial_step)
-        }
-        None => None,
-    };
-    let devices: Vec<Device> = match arg_matches.value_of("DEVICES") {
-        Some(arg) => {
-            let mut devices = vec![];
-            for token in arg.split(",") {
-                let cap = Regex::new(r"cuda\((\d+)\)$")?
-                    .captures(&token)
-                    .unwrap();
-                let dev_index = cap[1].parse()?;
-                devices.push(Device::Cuda(dev_index));
-            }
-            devices
-        }
-        None => vec![Device::Cuda(0)],
-    };
-    let save_image: bool = arg_matches.is_present("SAVE_IMAGE");
+    let args = parse_args()?;
 
     // Init log dir
-    if let Some(path) = log_dir {
+    if let Some(path) = &args.log_dir {
         if path.is_file() {
             panic!("The specified log dir path {:?} is a file", path);
         }
@@ -144,37 +98,34 @@ fn main() -> Fallible<()> {
             create_dir(path)?;
         }
     }
-
     // Load dataset
     info!("Loading dataset");
 
-    let num_devices = devices.len();
-
     let gqn_dataset = dataset::DeepMindDataSet::load_dir(
-        dataset_name,
-        &input_dir,
+        &args.dataset_name,
+        &args.input_dir,
         false,
-        devices.clone(),
-        batch_size,
+        args.devices.clone(),
+        args.batch_size,
     )?;
-    let frame_channels = gqn_dataset.frame_channels;
+    let input_frame_channels = gqn_dataset.frame_channels;
 
     // Spawn train workers
     let mut req_senders = vec![];
-    let (resp_sender, resp_receiver) = bounded(num_devices);
+    let (resp_sender, resp_receiver) = bounded(args.devices.len());
     let (param_senders, param_receivers) = {
         let mut senders = vec![];
         let mut receivers = vec![];
-        for dev in &devices[1..] {
+        for dev in &args.devices[1..] {
             let (sender, receiver) = bounded(1);
             senders.push((*dev, sender));
             receivers.push((*dev, receiver));
         }
         (senders, receivers)
     };
-    let update_barrier = Arc::new(Barrier::new(devices.len()));
+    let update_barrier = Arc::new(Barrier::new(args.devices.len()));
 
-    for (worker_id, worker_dev) in devices.iter().enumerate() {
+    for (worker_id, worker_dev) in args.devices.iter().enumerate() {
         let (req_sender, req_receiver) = bounded(1);
         let resp_sender_worker = resp_sender.clone();
         let param_receiver = match worker_id {
@@ -207,7 +158,7 @@ fn main() -> Fallible<()> {
                 debug!("Initialize model on worker {}", worker_id);
                 let model = {
                     let root = vs.root();
-                    let model = GqnModel::<TowerEncoder>::new(&root, frame_channels);
+                    let model = GqnModel::<TowerEncoder>::new(&root, input_frame_channels);
                     let _ = root.zeros("step", &[]);
                     model
                 };
@@ -237,9 +188,13 @@ fn main() -> Fallible<()> {
                         }
                         Ok(WorkerAction::Backward((step, elbo_loss))) => {
                             debug!("Backward pass on worker {}", worker_id);
+
+                            let begin = params::ADAM_LR_BEGIN;
+                            let end = params::ADAM_LR_END;
+                            let max_step = params::ANNEAL_LR_MAX;
+                            let lr = begin + (begin - end) * (1. - (step as f64 / max_step as f64).min(1.));
+
                             let opt = optimizer_opt.as_mut().unwrap();
-                            let lr = params::ADAM_LR_BETA +
-                                (params::ADAM_LR_ALPHA - params::ADAM_LR_BETA) * (1. - (step as f64 / params::ANNEAL_LR_TAU as f64).min(1.));
                             opt.set_lr(lr);
                             opt.backward_step(&elbo_loss);
                         }
@@ -320,7 +275,7 @@ fn main() -> Fallible<()> {
     let mut step = 0;
 
     // Load model params
-    if let Some(path) = model_file {
+    if let Some(path) = &args.model_file {
         if path.is_file() {
             info!("Load model file {:?}", path);
             for sender in req_senders.iter() {
@@ -330,7 +285,7 @@ fn main() -> Fallible<()> {
             // Update step count
             step = match resp_receiver.recv()? {
                 WorkerResponse::Step(resp_step) => {
-                    match initial_step {
+                    match args.initial_step {
                         Some(init_step) => init_step,
                         None => resp_step,
                     }
@@ -367,7 +322,7 @@ fn main() -> Fallible<()> {
 
         // combine model outputs
         let mut elbo_loss_grad = outputs[0].elbo_loss.shallow_clone();
-        let combined = combine_gqn_outputs(outputs, devices[0]);
+        let combined = combine_gqn_outputs(outputs, args.devices[0]);
 
         // Backward step
         tch::no_grad(|| elbo_loss_grad.copy_(&combined.elbo_loss));
@@ -379,17 +334,17 @@ fn main() -> Fallible<()> {
         }
 
         // Save model params
-        if let Some(path) = model_file {
-            if step % save_steps == 0 {
+        if let Some(path) = &args.model_file {
+            if step % args.save_steps == 0 {
                 req_senders[0].send(WorkerAction::SaveParams(path.to_path_buf(), step)).unwrap();
             }
         }
 
         // Log data
-        if let Some(path) = log_dir {
-            if step % log_steps == 0 {
+        if let Some(path) = &args.log_dir {
+            if step % args.log_steps == 0 {
                 // Save images
-                if save_image {
+                if args.save_images {
                     save_images(step, &combined, path);
                 }
 
@@ -413,7 +368,7 @@ fn main() -> Fallible<()> {
     }
 
     // Gracefully terminate workers
-    if let Some(path) = model_file {
+    if let Some(path) = &args.model_file {
         req_senders[0].send(WorkerAction::SaveParams(path.to_path_buf(), step)).unwrap();
     }
 
@@ -518,6 +473,81 @@ fn combine_gqn_outputs(outputs: Vec<GqnModelOutput>, target_device: Device) -> G
         means_gen,
         stds_gen,
     }
+}
+
+fn parse_args() -> Fallible<Args> {
+    let arg_yaml = load_yaml!("args.yml");
+    let arg_matches = clap::App::from_yaml(arg_yaml).get_matches();
+
+    let dataset_name = arg_matches.value_of("DATASET_NAME").unwrap().to_owned();
+    let input_dir = PathBuf::from(arg_matches.value_of("INPUT_DIR").unwrap());
+    let model_file = match arg_matches.value_of("MODEL_FILE") {
+        Some(file) => Some(PathBuf::from(file)),
+        None => None,
+    };
+    let log_dir = match arg_matches.value_of("LOG_DIR") {
+        Some(path) => Some(PathBuf::from(path)),
+        None => None,
+    };
+    let save_steps: i64 = {
+        let arg = arg_matches.value_of("SAVE_STEPS")
+            .unwrap_or("100");
+
+        let save_steps = arg.parse()?;
+        ensure!(save_steps > 0, "SAVE_STEPS should be positive");
+        save_steps
+    };
+    let log_steps: i64 = {
+        let arg = arg_matches.value_of("LOG_STEPS")
+            .unwrap_or("100");
+
+        let log_steps = arg.parse()?;
+        ensure!(log_steps > 0, "LOG_STEPS should be positive");
+        log_steps
+    };
+    let batch_size: usize = {
+        let arg = arg_matches.value_of("BATCH_SIZE")
+            .unwrap_or("4");
+        let batch_size = arg.parse()?;
+        ensure!(batch_size > 0, "BATCH_SIZE should be positive");
+        batch_size
+    };
+    let initial_step: Option<i64> = match arg_matches.value_of("INIT_STEP") {
+        Some(arg) => {
+            let initial_step = arg.parse()?;
+            ensure!(initial_step >= 0, "INIT_STEP should be positive");
+            Some(initial_step)
+        }
+        None => None,
+    };
+    let devices: Vec<Device> = match arg_matches.value_of("DEVICES") {
+        Some(arg) => {
+            let mut devices = vec![];
+            for token in arg.split(",") {
+                let cap = Regex::new(r"cuda\((\d+)\)$")?
+                    .captures(&token)
+                    .unwrap();
+                let dev_index = cap[1].parse()?;
+                devices.push(Device::Cuda(dev_index));
+            }
+            devices
+        }
+        None => vec![Device::Cuda(0)],
+    };
+    let save_images: bool = arg_matches.is_present("SAVE_IMAGE");
+
+    Ok(Args {
+        dataset_name,
+        input_dir,
+        model_file,
+        log_dir,
+        save_steps,
+        log_steps,
+        batch_size,
+        initial_step,
+        devices,
+        save_images,
+    })
 }
 
 fn save_images<P: AsRef<Path>>(step: i64, combined: &GqnModelOutput, log_dir: P) {
