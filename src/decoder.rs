@@ -9,7 +9,7 @@ pub struct GqnDecoder {
     train: bool,
 
     repr_channels: i64,
-    poses_channels: i64,
+    param_channels: i64,
     noise_channels: i64,
     cell_output_channels: i64,
     canvas_channels: i64,
@@ -50,7 +50,7 @@ impl GqnDecoder {
         train: bool,
         // channels
         repr_channels: i64,
-        poses_channels: i64,
+        param_channels: i64,
         noise_channels: i64,
         cell_output_channels: i64,
         canvas_channels: i64,
@@ -64,8 +64,8 @@ impl GqnDecoder {
         let pathb = path.borrow();
 
         let canvas_conv_input_channels = target_channels + canvas_channels;
-        let gen_input_channels = repr_channels + poses_channels + noise_channels;
-        let inf_input_channels = repr_channels + poses_channels + cell_output_channels;
+        let gen_input_channels = repr_channels + param_channels + noise_channels;
+        let inf_input_channels = repr_channels + param_channels + cell_output_channels;
 
         let mut generator_lstms = Vec::new();
         let mut inference_lstms = Vec::new();
@@ -173,7 +173,7 @@ impl GqnDecoder {
             device: pathb.device(),
 
             repr_channels,
-            poses_channels,
+            param_channels,
             noise_channels,
             cell_output_channels,
             canvas_channels,
@@ -199,7 +199,7 @@ impl GqnDecoder {
         representation: &Tensor,
         query_poses: &Tensor,
         target_frame: &Tensor,
-        train: bool,
+        _train: bool,
     ) -> GqnDecoderOutput {
         let (batch_size, repr_height, repr_width) = {
             let repr_size = representation.size();
@@ -218,7 +218,7 @@ impl GqnDecoder {
             (target_height, target_width)
         };
 
-        let broadcasted_poses = broadcast_poses(query_poses, repr_height, repr_width);
+        let broadcasted_poses = self.broadcast_poses(query_poses, repr_height, repr_width);
 
         let inf_init_state = self.inference_lstms[0].zero_state(batch_size, repr_height, repr_width);
         let gen_init_state = self.generator_lstms[0].zero_state(batch_size, repr_height, repr_width);
@@ -269,7 +269,7 @@ impl GqnDecoder {
             let inf_h_combined = prev_inf_h + inf_h_extra;
 
             assert!(representation.size()[1] == self.repr_channels);
-            assert!(broadcasted_poses.size()[1] == self.poses_channels);
+            assert!(broadcasted_poses.size()[1] == self.param_channels);
             assert!(prev_gen_h.size()[1] == self.cell_output_channels);
             let inf_input = Tensor::cat(&[representation, &broadcasted_poses, prev_gen_h], 1);
             let inf_state = inf_lstm.step(&inf_input, &inf_h_combined, prev_inf_c);
@@ -351,10 +351,15 @@ impl GqnDecoder {
         (means, stds, noise)
     }
 
-}
-
-fn broadcast_poses(poses: &Tensor, height: i64, width: i64) -> Tensor {
-    let batch_size = poses.size()[0];
-    poses.reshape(&[batch_size, params::POSE_CHANNELS, 1, 1])
-        .repeat(&[1, 1, height, width])
+    fn broadcast_poses(
+        &self,
+        poses: &Tensor,
+        height: i64,
+        width: i64,
+    ) -> Tensor
+    {
+        let batch_size = poses.size()[0];
+        poses.reshape(&[batch_size, self.param_channels, 1, 1])
+            .repeat(&[1, 1, height, width])
+    }
 }

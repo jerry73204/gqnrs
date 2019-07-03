@@ -50,7 +50,7 @@ lazy_static! {
 }
 
 struct Args {
-    dataset_name: String,
+    dataset_name: Option<String>,
     input_dir: PathBuf,
     model_file: Option<PathBuf>,
     log_dir: Option<PathBuf>,
@@ -59,6 +59,7 @@ struct Args {
     batch_size: usize,
     initial_step: Option<i64>,
     devices: Vec<Device>,
+    dataset_type: DatasetType,
     save_images: bool,
 }
 
@@ -75,6 +76,11 @@ enum WorkerAction where
 enum WorkerResponse {
     ForwardOutput(GqnModelOutput),
     Step(i64),
+}
+
+#[derive(Debug, Copy, Clone)]
+enum DatasetType {
+    GQN, File,
 }
 
 fn main() -> Fallible<()> {
@@ -101,14 +107,39 @@ fn main() -> Fallible<()> {
     // Load dataset
     info!("Loading dataset");
 
-    let gqn_dataset = dataset::DeepMindDataSet::load_dir(
-        &args.dataset_name,
-        &args.input_dir,
-        false,
-        args.devices.clone(),
-        args.batch_size,
-    )?;
-    let input_frame_channels = gqn_dataset.frame_channels;
+    let (mut train_iter, frame_channels, param_channels) =
+        match args.dataset_type {
+            DatasetType::GQN => {
+                ensure!(args.dataset_name.is_some(), "dataset_name is not set");
+                let dataset_name = Box::new(args.dataset_name.unwrap().clone());
+                let gqn_dataset = dataset::DeepMindDataSet::load_dir(
+                    &dataset_name,
+                    &args.input_dir,
+                    false,
+                    args.devices.clone(),
+                    args.batch_size,
+                )?;
+                let frame_channels = gqn_dataset.frame_channels;
+                let param_channels = gqn_dataset.param_channels;
+                (gqn_dataset.train_iter, frame_channels, param_channels)
+            }
+            DatasetType::File => {
+                let time_step = 1.;
+                let sequence_size = 10;
+                let frame_size = 128;
+                let file_dataset = dataset::FileDataset::load(
+                    &args.input_dir,
+                    args.batch_size,
+                    sequence_size,
+                    frame_size,
+                    time_step,
+                    args.devices.clone(),
+                )?;
+                let frame_channels = file_dataset.frame_channels;
+                let param_channels = file_dataset.param_channels;
+                (file_dataset.train_iter, frame_channels, param_channels)
+            }
+        };
 
     // Spawn train workers
     let mut req_senders = vec![];
@@ -158,7 +189,7 @@ fn main() -> Fallible<()> {
                 debug!("Initialize model on worker {}", worker_id);
                 let model = {
                     let root = vs.root();
-                    let model = GqnModel::<TowerEncoder>::new(&root, input_frame_channels);
+                    let model = GqnModel::<TowerEncoder>::new(&root, frame_channels, param_channels);
                     let _ = root.zeros("step", &[]);
                     model
                 };
@@ -237,7 +268,7 @@ fn main() -> Fallible<()> {
                                 0 => {
                                     debug!("Send param copies from worker {}", worker_id);
                                     let vs_rc = Arc::new(vs);
-                                    for (to_dev, sender) in param_senders_worker.as_ref().unwrap().iter() {
+                                    for (_to_dev, sender) in param_senders_worker.as_ref().unwrap().iter() {
                                         sender.send(vs_rc.clone()).unwrap();
                                     }
                                     update_barrier_worker.wait();
@@ -270,7 +301,6 @@ fn main() -> Fallible<()> {
     }
 
     // Produce train examples
-    let mut train_iter = gqn_dataset.train_iter;
     let global_instant = Instant::now();
     let mut step = 0;
 
@@ -479,10 +509,13 @@ fn parse_args() -> Fallible<Args> {
     let arg_yaml = load_yaml!("args.yml");
     let arg_matches = clap::App::from_yaml(arg_yaml).get_matches();
 
-    let dataset_name = arg_matches.value_of("DATASET_NAME").unwrap().to_owned();
     let input_dir = PathBuf::from(arg_matches.value_of("INPUT_DIR").unwrap());
     let model_file = match arg_matches.value_of("MODEL_FILE") {
         Some(file) => Some(PathBuf::from(file)),
+        None => None,
+    };
+    let dataset_name = match arg_matches.value_of("DATASET_NAME") {
+        Some(name) => Some(name.to_owned()),
         None => None,
     };
     let log_dir = match arg_matches.value_of("LOG_DIR") {
@@ -534,6 +567,17 @@ fn parse_args() -> Fallible<Args> {
         }
         None => vec![Device::Cuda(0)],
     };
+    let dataset_type = match arg_matches.value_of("DATASET_TYPE") {
+        Some(arg) => {
+            let dataset_type = match arg {
+                "gqn" => DatasetType::GQN,
+                "file" => DatasetType::File,
+                _ => bail!("DATASET_TYPE {} is not understood. It should be either 'gqn' or 'file'.", arg),
+            };
+            dataset_type
+        }
+        None => bail!("DATASET_TYPE is not specified"),
+    };
     let save_images: bool = arg_matches.is_present("SAVE_IMAGE");
 
     Ok(Args {
@@ -546,6 +590,7 @@ fn parse_args() -> Fallible<Args> {
         batch_size,
         initial_step,
         devices,
+        dataset_type,
         save_images,
     })
 }
@@ -607,13 +652,13 @@ fn save_model_outputs<P: AsRef<Path>>(step: i64, combined: &GqnModelOutput, log_
 fn run_model(model: &GqnModel<TowerEncoder>, example: ExampleType, step: i64) -> GqnModelOutput {
     let context_frames = example["context_frames"].downcast_ref::<Tensor>().unwrap();
     let target_frame = example["target_frame"].downcast_ref::<Tensor>().unwrap();
-    let context_cameras = example["context_cameras"].downcast_ref::<Tensor>().unwrap();
-    let query_camera = example["query_camera"].downcast_ref::<Tensor>().unwrap();
+    let context_params = example["context_params"].downcast_ref::<Tensor>().unwrap();
+    let query_params = example["query_params"].downcast_ref::<Tensor>().unwrap();
 
     model.forward_t(
         context_frames,
-        context_cameras,
-        query_camera,
+        context_params,
+        query_params,
         target_frame,
         step,
         true,

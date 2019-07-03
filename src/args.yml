@@ -3,11 +3,6 @@ version: "1.0"
 author: Jerry Lin <jerry73204@gmail.com>
 about: GQN implementation in Rust
 args:
-  - DATASET_NAME:
-      short: n
-      long: dataset-name
-      required: true
-      takes_value: true
   - INPUT_DIR:
       short: i
       long: input-dir
@@ -17,6 +12,10 @@ args:
       short: b
       long: batch-size
       required: false
+      takes_value: true
+  - DATASET_NAME:
+      short: n
+      long: dataset-name
       takes_value: true
   - MODEL_FILE:
       short: m
@@ -38,4 +37,8 @@ args:
       long: save-image
   - INIT_STEP:
       long: initial-step
+      takes_value: true
+  - DATASET_TYPE:
+      long: dataset-type
+      required: true
       takes_value: true

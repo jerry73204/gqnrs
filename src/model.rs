@@ -1,4 +1,5 @@
 use std::any::TypeId;
+use std::borrow::Borrow;
 use tch::{nn, nn::OptimizerConfig, Tensor, Kind, Device, Reduction};
 use crate::encoder::{GqnEncoder, TowerEncoder, PoolEncoder};
 use crate::decoder::{GqnDecoder, GqnDecoderOutput};
@@ -28,30 +29,37 @@ pub struct GqnModel<E: GqnEncoder> {
 impl<E: 'static> GqnModel<E> where
     E: GqnEncoder,
 {
-    pub fn new(path: &nn::Path, image_channels: i64) -> GqnModel<E> {
+    pub fn new<'a, P: Borrow<nn::Path<'a>>>(
+        path: P,
+        frame_channels: i64,
+        param_channels: i64,
+    ) -> GqnModel<E>
+    {
+        let pathb = path.borrow();
+
         let encoder = E::new(
-            &(path / "encoder"),
+            pathb / "encoder",
             params::ENC_CHANNELS,
-            params::POSE_CHANNELS,
+            param_channels,
         );
 
         let decoder = GqnDecoder::new(
-            &(path / "decoder"),  // path
+            pathb / "decoder",  // path
             params::SEQ_LENGTH,  // num layers
             true,               // biases
             true,               // train
             params::ENC_CHANNELS,
-            params::POSE_CHANNELS,
+            param_channels,
             params::Z_CHANNELS,
             params::LSTM_OUTPUT_CHANNELS,
             params::LSTM_CANVAS_CHANNELS,
-            image_channels,
+            frame_channels,
             params::LSTM_KERNEL_SIZE,
             params::ETA_INTERNAL_KERNEL_SIZE,
             params::ETA_EXTERNAL_KERNEL_SIZE,
         );
 
-        let device = path.device();
+        let device = pathb.device();
 
         GqnModel {
             encoder,

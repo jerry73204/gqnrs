@@ -1,6 +1,3 @@
-// input parameters
-pub const POSE_CHANNELS: i64 = 7;
-
 // hyper-parameters: scene representation
 pub const ENC_CHANNELS: i64 = 256;
 

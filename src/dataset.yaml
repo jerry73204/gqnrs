@@ -1,58 +1,72 @@
-num_channels: 3
-num_camera_params: 5
 dataset:
   jaco:
+      frame_channels: 3
       basepath: 'jaco'
       train_size: 3600
       test_size: 400
       frame_size: 64
       sequence_size: 11
+      num_camera_params: 5
 
   mazes:
+      frame_channels: 3
       basepath: 'mazes'
       train_size: 1080
       test_size: 120
       frame_size: 84
       sequence_size: 300
+      num_camera_params: 5
 
   rooms_free_camera_with_object_rotations:
+      frame_channels: 3
       basepath: 'rooms_free_camera_with_object_rotations'
       train_size: 2034
       test_size: 226
       frame_size: 128
       sequence_size: 10
+      num_camera_params: 5
 
   rooms_ring_camera:
+      frame_channels: 3
       basepath: 'rooms_ring_camera'
       train_size: 2160
       test_size: 240
       frame_size: 64
       sequence_size: 10
+      num_camera_params: 5
 
   rooms_ring_camera_debug:
+      frame_channels: 3
       basepath: 'rooms_ring_camera_debug'
       train_size: 1,  # 18
       test_size: 1,  # 2
       frame_size: 64
       sequence_size: 10
+      num_camera_params: 5
 
   rooms_free_camera_no_object_rotations:
+      frame_channels: 3
       basepath: 'rooms_free_camera_no_object_rotations'
       train_size: 2160
       test_size: 240
       frame_size: 64
       sequence_size: 10
+      num_camera_params: 5
 
   shepard_metzler_5_parts:
+      frame_channels: 3
       basepath: 'shepard_metzler_5_parts'
       train_size: 900
       test_size: 100
       frame_size: 64
       sequence_size: 15
+      num_camera_params: 5
 
   shepard_metzler_7_parts:
+      frame_channels: 3
       basepath: 'shepard_metzler_7_parts'
       train_size: 900
       test_size: 100
       frame_size: 64
       sequence_size: 15
+      num_camera_params: 5
