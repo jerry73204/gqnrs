@@ -1,5 +1,5 @@
 use std::borrow::Borrow;
-use tch::{Tensor, nn};
+use tch::{nn, Tensor};
 
 pub trait GqnEncoder {
     fn new<'a, P: Borrow<nn::Path<'a>>>(path: P, repr_channels: i64, param_channels: i64) -> Self;
@@ -20,19 +20,37 @@ pub struct TowerEncoder {
 }
 
 impl GqnEncoder for TowerEncoder {
-    fn new<'a, P: Borrow<nn::Path<'a>>>(path: P, repr_channels: i64, param_channels: i64) -> TowerEncoder {
+    fn new<'a, P: Borrow<nn::Path<'a>>>(
+        path: P,
+        repr_channels: i64,
+        param_channels: i64,
+    ) -> TowerEncoder {
         let pathb = path.borrow();
 
-        let conv_config = |padding, stride| {
-            nn::ConvConfig {padding: padding, stride: stride, ..Default::default()}
+        let conv_config = |padding, stride| nn::ConvConfig {
+            padding: padding,
+            stride: stride,
+            ..Default::default()
         };
 
         let conv1 = nn::conv2d(pathb / "conv1", 3, 256, 2, conv_config(0, 2));
         let conv2 = nn::conv2d(pathb / "conv2", 256, 128, 1, conv_config(0, 1));
         let conv3 = nn::conv2d(pathb / "conv3", 256, 128, 3, conv_config(1, 1));
         let conv4 = nn::conv2d(pathb / "conv4", 128, 256, 2, conv_config(0, 2));
-        let conv5 = nn::conv2d(pathb / "conv5", 256 + param_channels, 128, 1, conv_config(0, 1));
-        let conv6 = nn::conv2d(pathb / "conv6", 256 + param_channels, 128, 3, conv_config(1, 1));
+        let conv5 = nn::conv2d(
+            pathb / "conv5",
+            256 + param_channels,
+            128,
+            1,
+            conv_config(0, 1),
+        );
+        let conv6 = nn::conv2d(
+            pathb / "conv6",
+            256 + param_channels,
+            128,
+            3,
+            conv_config(1, 1),
+        );
         let conv7 = nn::conv2d(pathb / "conv7", 128, 256, 3, conv_config(1, 1));
         let conv8 = nn::conv2d(pathb / "conv8", 256, repr_channels, 1, conv_config(0, 1));
 
@@ -81,12 +99,14 @@ pub struct PoolEncoder {
 }
 
 impl GqnEncoder for PoolEncoder {
-    fn new<'a, P: Borrow<nn::Path<'a>>>(path: P, repr_channels: i64, param_channels: i64) -> PoolEncoder {
+    fn new<'a, P: Borrow<nn::Path<'a>>>(
+        path: P,
+        repr_channels: i64,
+        param_channels: i64,
+    ) -> PoolEncoder {
         let tower_encoder = TowerEncoder::new(path, repr_channels, param_channels);
 
-        PoolEncoder {
-            tower_encoder,
-        }
+        PoolEncoder { tower_encoder }
     }
 
     fn forward_t(&self, frames: &Tensor, poses: &Tensor, train: bool) -> Tensor {
@@ -98,7 +118,8 @@ impl GqnEncoder for PoolEncoder {
         let width = net_size[3];
 
         // reduce mean of height, width dimension
-        net = net.view(&[batch_size, n_channels, height * width])
+        net = net
+            .view(&[batch_size, n_channels, height * width])
             .mean2(&[2], false)
             .view(&[batch_size, n_channels, 1, 1]);
 

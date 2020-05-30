@@ -1,11 +1,11 @@
+use crate::decoder::{GqnDecoder, GqnDecoderOutput};
+use crate::dist::{Normal, Rv};
+use crate::encoder::{GqnEncoder, PoolEncoder, TowerEncoder};
+use crate::objective::elbo;
+use crate::params;
 use std::any::TypeId;
 use std::borrow::Borrow;
-use tch::{nn, nn::OptimizerConfig, Tensor, Kind, Device, Reduction};
-use crate::encoder::{GqnEncoder, TowerEncoder, PoolEncoder};
-use crate::decoder::{GqnDecoder, GqnDecoderOutput};
-use crate::params;
-use crate::dist::{Rv, Normal};
-use crate::objective::elbo;
+use tch::{nn, nn::OptimizerConfig, Device, Kind, Reduction, Tensor};
 
 pub struct GqnModelOutput {
     pub elbo_loss: Tensor,
@@ -26,26 +26,22 @@ pub struct GqnModel<E: GqnEncoder> {
     device: Device,
 }
 
-impl<E: 'static> GqnModel<E> where
+impl<E: 'static> GqnModel<E>
+where
     E: GqnEncoder,
 {
     pub fn new<'a, P: Borrow<nn::Path<'a>>>(
         path: P,
         frame_channels: i64,
         param_channels: i64,
-    ) -> GqnModel<E>
-    {
+    ) -> GqnModel<E> {
         let pathb = path.borrow();
 
-        let encoder = E::new(
-            pathb / "encoder",
-            params::ENC_CHANNELS,
-            param_channels,
-        );
+        let encoder = E::new(pathb / "encoder", params::ENC_CHANNELS, param_channels);
 
         let decoder = GqnDecoder::new(
             pathb / "decoder",  // path
-            params::SEQ_LENGTH,  // num layers
+            params::SEQ_LENGTH, // num layers
             true,               // biases
             true,               // train
             params::ENC_CHANNELS,
@@ -76,8 +72,7 @@ impl<E: 'static> GqnModel<E> where
         target_frame: &Tensor,
         step: i64,
         train: bool,
-    ) -> GqnModelOutput
-    {
+    ) -> GqnModelOutput {
         // Pack encoder input, melt batch and seq dimensions
         let (batch_size, seq_size, channels, height, width) = {
             let context_frames_size = context_frames.size();
@@ -98,16 +93,25 @@ impl<E: 'static> GqnModel<E> where
             n_params
         };
 
-        let packed_context_frames = context_frames.view(&[batch_size * seq_size, channels, height, width]);
+        let packed_context_frames =
+            context_frames.view(&[batch_size * seq_size, channels, height, width]);
         let packed_context_poses = context_poses.view(&[batch_size * seq_size, n_params]);
-        let packed_representation = self.encoder.forward_t(&packed_context_frames, &packed_context_poses, train);
+        let packed_representation =
+            self.encoder
+                .forward_t(&packed_context_frames, &packed_context_poses, train);
 
         let representation = {
             let size = packed_representation.size();
             let repr_channels = size[1];
             let repr_height = size[2];
             let repr_width = size[3];
-            let stacked_repr = packed_representation.view(&[batch_size, seq_size, repr_channels, repr_height, repr_width]);
+            let stacked_repr = packed_representation.view(&[
+                batch_size,
+                seq_size,
+                repr_channels,
+                repr_height,
+                repr_width,
+            ]);
             let repr = stacked_repr.sum2(&[1], false);
             repr
         };
@@ -127,8 +131,7 @@ impl<E: 'static> GqnModel<E> where
 
                 assert!(target_height == repr_height * 4 && target_width == repr_width * 4);
                 representation
-            }
-            else if encoder_type == TypeId::of::<PoolEncoder>() {
+            } else if encoder_type == TypeId::of::<PoolEncoder>() {
                 let target_size = target_frame.size();
                 let target_height = target_size[2];
                 let target_width = target_size[3];
@@ -136,8 +139,7 @@ impl<E: 'static> GqnModel<E> where
                 let repr_width = target_width / 4;
 
                 representation.repeat(&[1, 1, repr_height, repr_width])
-            }
-            else {
+            } else {
                 panic!("bug");
             }
         };
@@ -151,7 +153,9 @@ impl<E: 'static> GqnModel<E> where
             stds_inf,
             means_gen,
             stds_gen,
-        } = self.decoder.forward_t(&broadcast_repr, query_poses, target_frame, train);
+        } = self
+            .decoder
+            .forward_t(&broadcast_repr, query_poses, target_frame, train);
 
         let stds_target = pixel_std_annealing(&means_target.size(), step, self.device);
         let target_normal = Normal::new(&means_target, &stds_target);
@@ -191,6 +195,5 @@ fn pixel_std_annealing(shape: &[i64], step: i64, device: Device) -> Tensor {
     let max_step = params::ANNEAL_SIGMA_MAX;
     let std = end + (begin - end) * (1.0 - step as f64 / max_step).max(0.0);
 
-    Tensor::zeros(shape, (Kind::Float, device))
-        .fill_(std)
+    Tensor::zeros(shape, (Kind::Float, device)).fill_(std)
 }

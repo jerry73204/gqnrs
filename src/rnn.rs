@@ -1,5 +1,5 @@
 use std::borrow::Borrow;
-use tch::{nn, Device, Tensor, Kind};
+use tch::{nn, Device, Kind, Tensor};
 
 pub struct GqnLSTMState {
     pub h: Tensor,
@@ -24,10 +24,9 @@ impl GqnLSTM {
         train: bool,
         in_channels: i64,
         out_channels: i64,
-        kernel_size:i64,
+        kernel_size: i64,
         forget_bias: f64,
-    ) -> GqnLSTM
-    {
+    ) -> GqnLSTM {
         let pathb = path.borrow();
 
         let hidden_channels = 4 * out_channels;
@@ -77,26 +76,10 @@ impl GqnLSTM {
 
     pub fn step(&self, input: &Tensor, hx: &Tensor, cx: &Tensor) -> GqnLSTMState {
         let gates = input.apply(&self.conv_ih) + hx.apply(&self.conv_hh);
-        let mut in_gate = gates.narrow(
-            1,
-            0 * self.out_channels,
-            self.out_channels,
-        );
-        let mut forget_gate = gates.narrow(
-            1,
-            1 * self.out_channels,
-            self.out_channels,
-        );
-        let mut cell_gate = gates.narrow(
-            1,
-            2 * self.out_channels,
-            self.out_channels,
-        );
-        let mut out_gate = gates.narrow(
-            1,
-            3 * self.out_channels,
-            self.out_channels,
-        );
+        let mut in_gate = gates.narrow(1, 0 * self.out_channels, self.out_channels);
+        let mut forget_gate = gates.narrow(1, 1 * self.out_channels, self.out_channels);
+        let mut cell_gate = gates.narrow(1, 2 * self.out_channels, self.out_channels);
+        let mut out_gate = gates.narrow(1, 3 * self.out_channels, self.out_channels);
 
         in_gate = in_gate.sigmoid();
         forget_gate = forget_gate.sigmoid() + self.forget_bias;

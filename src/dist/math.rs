@@ -1,4 +1,4 @@
-use tch::{nn, Tensor, Kind};
+use tch::{nn, Kind, Tensor};
 
 pub fn log_ndtr(x: &Tensor) -> Tensor {
     log_ndtr_ext(x, 3)
@@ -11,14 +11,8 @@ pub fn log_ndtr_ext(x: &Tensor, series_order: i64) -> Tensor {
     //                 {   5,  x.dtype=float32
 
     let (lower_segment, upper_segment) = match x.kind() {
-        Kind::Float => (
-            Tensor::of_slice(&[-10_f32]),
-            Tensor::of_slice(&[5_f32]),
-        ),
-        Kind::Double => (
-            Tensor::of_slice(&[-20_f64]),
-            Tensor::of_slice(&[8_f64]),
-        ),
+        Kind::Float => (Tensor::of_slice(&[-10_f32]), Tensor::of_slice(&[5_f32])),
+        Kind::Double => (Tensor::of_slice(&[-20_f64]), Tensor::of_slice(&[8_f64])),
         _ => panic!("Unsupported tensor kind"),
     };
 
@@ -28,10 +22,7 @@ pub fn log_ndtr_ext(x: &Tensor, series_order: i64) -> Tensor {
 
     above_upper.where_(
         &x.gt1(&upper_segment),
-        &between.where_(
-            &x.gt1(&lower_segment),
-            &below_lower,
-        )
+        &between.where_(&x.gt1(&lower_segment), &below_lower),
     )
 }
 
@@ -41,10 +32,7 @@ pub fn ndtr(x: &Tensor) -> Tensor {
     let z = w.abs();
     let y = (1. + w.erf()).where_(
         &z.lt1(&half_sqrt_2),
-        &(2. - z.erfc()).where_(
-            &w.gt1(&w.zeros_like()),
-            &z.erfc(),
-        )
+        &(2. - z.erfc()).where_(&w.gt1(&w.zeros_like()), &z.erfc()),
     );
     y * 0.5
 }
@@ -57,7 +45,7 @@ pub fn log_ndtr_lower(x: &Tensor, series_order: i64) -> Tensor {
 
 pub fn log_ndtr_asymptotic_series(x: &Tensor, series_order: i64) -> Tensor {
     if series_order <= 0 {
-        return (1.0).into()
+        return (1.0).into();
     }
 
     let x_2 = x.pow(2);

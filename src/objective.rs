@@ -1,5 +1,5 @@
+use crate::dist::{KLDiv, Normal, Rv};
 use tch::{nn, Tensor};
-use crate::dist::{Normal, Rv, KLDiv};
 
 pub fn elbo(
     means_target: &Tensor,
@@ -18,15 +18,14 @@ pub fn elbo(
 
     // Assume batch first and equal seq length
     assert!(
-        seq_len == means_inf.size()[1] &&
-            seq_len == stds_inf.size()[1] &&
-            seq_len == means_gen.size()[1] &&
-            seq_len == stds_gen.size()[1]
+        seq_len == means_inf.size()[1]
+            && seq_len == stds_inf.size()[1]
+            && seq_len == means_gen.size()[1]
+            && seq_len == stds_gen.size()[1]
     );
 
     let normal_target = Normal::new(means_target, stds_target);
-    let target_llh = -normal_target.log_prob(target_frame)
-        .sum2(&[1, 2, 3], false);
+    let target_llh = -normal_target.log_prob(target_frame).sum2(&[1, 2, 3], false);
 
     let mut kl_div_sum = None;
     for ind in 0..seq_len {
@@ -46,8 +45,7 @@ pub fn elbo(
         };
     }
 
-    let kl_regularizer = kl_div_sum.unwrap()
-        .sum2(&[1, 2, 3], false);
+    let kl_regularizer = kl_div_sum.unwrap().sum2(&[1, 2, 3], false);
 
     let elbo = target_llh + kl_regularizer;
 

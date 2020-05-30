@@ -1,48 +1,54 @@
 extern crate byteorder;
-extern crate serde;
+extern crate crc;
 extern crate image;
 extern crate protobuf;
-extern crate crc;
-#[macro_use] extern crate clap;
-extern crate tch;
-extern crate yaml_rust;
+extern crate serde;
+#[macro_use]
+extern crate clap;
 extern crate glob;
 extern crate rayon;
-#[macro_use] extern crate maplit;
-#[macro_use] extern crate log;
+extern crate tch;
+extern crate yaml_rust;
+#[macro_use]
+extern crate maplit;
+#[macro_use]
+extern crate log;
 extern crate pretty_env_logger;
-#[macro_use] extern crate ndarray;
-extern crate tfrecord_rs;
-extern crate par_map;
+#[macro_use]
+extern crate ndarray;
 extern crate crossbeam;
 extern crate ctrlc;
-#[macro_use] extern crate lazy_static;
+extern crate par_map;
+extern crate tfrecord_rs;
+#[macro_use]
+extern crate lazy_static;
 extern crate regex;
-#[macro_use] extern crate failure;
+#[macro_use]
+extern crate failure;
 
-mod dist;
-mod model;
-mod encoder;
-mod decoder;
-mod params;
 mod dataset;
-mod rnn;
+mod decoder;
+mod dist;
+mod encoder;
+mod model;
 mod objective;
+mod params;
+mod rnn;
 
-use std::fs::create_dir;
-use std::sync::{Arc, Barrier};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
-use std::path::{Path, PathBuf};
-use std::thread;
-use tch::{nn, nn::Init, nn::OptimizerConfig, Device, Tensor, Kind};
-use crossbeam::channel::bounded;
-use tfrecord_rs::ExampleType;
-use regex::Regex;
-use image::{Rgb, ImageBuffer};
-use failure::Fallible;
 use crate::encoder::TowerEncoder;
 use crate::model::{GqnModel, GqnModelOutput};
+use crossbeam::channel::bounded;
+use failure::Fallible;
+use image::{ImageBuffer, Rgb};
+use regex::Regex;
+use std::fs::create_dir;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Barrier};
+use std::thread;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use tch::{nn, nn::Init, nn::OptimizerConfig, Device, Kind, Tensor};
+use tfrecord_rs::ExampleType;
 
 lazy_static! {
     static ref SHUTDOWN_FLAG: AtomicBool = AtomicBool::new(false);
@@ -63,8 +69,7 @@ struct Args {
     save_images: bool,
 }
 
-enum WorkerAction where
-{
+enum WorkerAction {
     Forward((i64, ExampleType)),
     Backward((i64, Tensor)),
     CopyParams,
@@ -80,7 +85,8 @@ enum WorkerResponse {
 
 #[derive(Debug, Copy, Clone)]
 enum DatasetType {
-    GQN, File,
+    GQN,
+    File,
 }
 
 fn main() -> Fallible<()> {
@@ -99,47 +105,45 @@ fn main() -> Fallible<()> {
     if let Some(path) = &args.log_dir {
         if path.is_file() {
             panic!("The specified log dir path {:?} is a file", path);
-        }
-        else if !path.exists() {
+        } else if !path.exists() {
             create_dir(path)?;
         }
     }
     // Load dataset
     info!("Loading dataset");
 
-    let (mut train_iter, frame_channels, param_channels) =
-        match args.dataset_type {
-            DatasetType::GQN => {
-                ensure!(args.dataset_name.is_some(), "dataset_name is not set");
-                let dataset_name = Box::new(args.dataset_name.unwrap().clone());
-                let gqn_dataset = dataset::DeepMindDataSet::load_dir(
-                    &dataset_name,
-                    &args.input_dir,
-                    false,
-                    args.devices.clone(),
-                    args.batch_size,
-                )?;
-                let frame_channels = gqn_dataset.frame_channels;
-                let param_channels = gqn_dataset.param_channels;
-                (gqn_dataset.train_iter, frame_channels, param_channels)
-            }
-            DatasetType::File => {
-                let time_step = 1.;
-                let sequence_size = 10;
-                let frame_size = 128;
-                let file_dataset = dataset::FileDataset::load(
-                    &args.input_dir,
-                    args.batch_size,
-                    sequence_size,
-                    frame_size,
-                    time_step,
-                    args.devices.clone(),
-                )?;
-                let frame_channels = file_dataset.frame_channels;
-                let param_channels = file_dataset.param_channels;
-                (file_dataset.train_iter, frame_channels, param_channels)
-            }
-        };
+    let (mut train_iter, frame_channels, param_channels) = match args.dataset_type {
+        DatasetType::GQN => {
+            ensure!(args.dataset_name.is_some(), "dataset_name is not set");
+            let dataset_name = Box::new(args.dataset_name.unwrap().clone());
+            let gqn_dataset = dataset::DeepMindDataSet::load_dir(
+                &dataset_name,
+                &args.input_dir,
+                false,
+                args.devices.clone(),
+                args.batch_size,
+            )?;
+            let frame_channels = gqn_dataset.frame_channels;
+            let param_channels = gqn_dataset.param_channels;
+            (gqn_dataset.train_iter, frame_channels, param_channels)
+        }
+        DatasetType::File => {
+            let time_step = 1.;
+            let sequence_size = 10;
+            let frame_size = 128;
+            let file_dataset = dataset::FileDataset::load(
+                &args.input_dir,
+                args.batch_size,
+                sequence_size,
+                frame_size,
+                time_step,
+                args.devices.clone(),
+            )?;
+            let frame_channels = file_dataset.frame_channels;
+            let param_channels = file_dataset.param_channels;
+            (file_dataset.train_iter, frame_channels, param_channels)
+        }
+    };
 
     // Spawn train workers
     let mut req_senders = vec![];
@@ -169,7 +173,8 @@ fn main() -> Fallible<()> {
         };
         let param_senders_worker = match worker_id {
             0 => {
-                let senders: Vec<_> = param_senders.iter()
+                let senders: Vec<_> = param_senders
+                    .iter()
                     .map(|(to_dev, sender)| ((*to_dev).clone(), sender.clone()))
                     .collect();
                 Some(senders)
@@ -189,7 +194,8 @@ fn main() -> Fallible<()> {
                 debug!("Initialize model on worker {}", worker_id);
                 let model = {
                     let root = vs.root();
-                    let model = GqnModel::<TowerEncoder>::new(&root, frame_channels, param_channels);
+                    let model =
+                        GqnModel::<TowerEncoder>::new(&root, frame_channels, param_channels);
                     let _ = root.zeros("step", &[]);
                     model
                 };
@@ -214,7 +220,7 @@ fn main() -> Fallible<()> {
                                     error!("Worker {} failed: {:?}", worker_id, err);
                                     return;
                                 }
-                                _ => {},
+                                _ => {}
                             }
                         }
                         Ok(WorkerAction::Backward((step, elbo_loss))) => {
@@ -223,7 +229,8 @@ fn main() -> Fallible<()> {
                             let begin = params::ADAM_LR_BEGIN;
                             let end = params::ADAM_LR_END;
                             let max_step = params::ANNEAL_LR_MAX;
-                            let lr = begin + (begin - end) * (1. - (step as f64 / max_step as f64).min(1.));
+                            let lr = begin
+                                + (begin - end) * (1. - (step as f64 / max_step as f64).min(1.));
 
                             let opt = optimizer_opt.as_mut().unwrap();
                             opt.set_lr(lr);
@@ -237,8 +244,7 @@ fn main() -> Fallible<()> {
                             if worker_id == 0 {
                                 let step = {
                                     let root = vs.root();
-                                    let step_tensor = root.get("step")
-                                        .unwrap();
+                                    let step_tensor = root.get("step").unwrap();
                                     // Uncomment this for backward compatibility
                                     // let step_tensor = root.entry("step")
                                     //     .or_zeros(&[]);
@@ -250,7 +256,7 @@ fn main() -> Fallible<()> {
                                         error!("Worker {} failed: {:?}", worker_id, err);
                                         return;
                                     }
-                                    _ => {},
+                                    _ => {}
                                 }
                             }
                         }
@@ -268,7 +274,9 @@ fn main() -> Fallible<()> {
                                 0 => {
                                     debug!("Send param copies from worker {}", worker_id);
                                     let vs_rc = Arc::new(vs);
-                                    for (_to_dev, sender) in param_senders_worker.as_ref().unwrap().iter() {
+                                    for (_to_dev, sender) in
+                                        param_senders_worker.as_ref().unwrap().iter()
+                                    {
                                         sender.send(vs_rc.clone()).unwrap();
                                     }
                                     update_barrier_worker.wait();
@@ -284,11 +292,11 @@ fn main() -> Fallible<()> {
                                     update_barrier_worker.wait();
                                 }
                             }
-                        },
+                        }
                         Ok(WorkerAction::Terminate) => {
                             debug!("Worker {} finished", worker_id);
                             return;
-                        },
+                        }
                         Err(err) => {
                             error!("Worker {} failed: {:?}", worker_id, err);
                             return;
@@ -309,17 +317,17 @@ fn main() -> Fallible<()> {
         if path.is_file() {
             info!("Load model file {:?}", path);
             for sender in req_senders.iter() {
-                sender.send(WorkerAction::LoadParams(path.to_path_buf())).unwrap();
+                sender
+                    .send(WorkerAction::LoadParams(path.to_path_buf()))
+                    .unwrap();
             }
 
             // Update step count
             step = match resp_receiver.recv()? {
-                WorkerResponse::Step(resp_step) => {
-                    match args.initial_step {
-                        Some(init_step) => init_step,
-                        None => resp_step,
-                    }
-                }
+                WorkerResponse::Step(resp_step) => match args.initial_step {
+                    Some(init_step) => init_step,
+                    None => resp_step,
+                },
                 _ => panic!("Wrong response type"),
             }
         }
@@ -337,7 +345,9 @@ fn main() -> Fallible<()> {
         // Send examples to workers
         let n_examples = examples.len();
         for (sender, example) in req_senders.iter().zip(examples.into_iter()) {
-            sender.send(WorkerAction::Forward((step as i64, example))).unwrap();
+            sender
+                .send(WorkerAction::Forward((step as i64, example)))
+                .unwrap();
         }
 
         // Receive outputs from workers
@@ -356,7 +366,9 @@ fn main() -> Fallible<()> {
 
         // Backward step
         tch::no_grad(|| elbo_loss_grad.copy_(&combined.elbo_loss));
-        req_senders[0].send(WorkerAction::Backward((step as i64, elbo_loss_grad))).unwrap();
+        req_senders[0]
+            .send(WorkerAction::Backward((step as i64, elbo_loss_grad)))
+            .unwrap();
 
         // let workers update params
         for sender in req_senders.iter() {
@@ -366,7 +378,9 @@ fn main() -> Fallible<()> {
         // Save model params
         if let Some(path) = &args.model_file {
             if step % args.save_steps == 0 {
-                req_senders[0].send(WorkerAction::SaveParams(path.to_path_buf(), step)).unwrap();
+                req_senders[0]
+                    .send(WorkerAction::SaveParams(path.to_path_buf(), step))
+                    .unwrap();
             }
         }
 
@@ -399,7 +413,9 @@ fn main() -> Fallible<()> {
 
     // Gracefully terminate workers
     if let Some(path) = &args.model_file {
-        req_senders[0].send(WorkerAction::SaveParams(path.to_path_buf(), step)).unwrap();
+        req_senders[0]
+            .send(WorkerAction::SaveParams(path.to_path_buf(), step))
+            .unwrap();
     }
 
     for (n, sender) in req_senders.into_iter().enumerate() {
@@ -413,16 +429,15 @@ fn main() -> Fallible<()> {
 fn combine_gqn_outputs(outputs: Vec<GqnModelOutput>, target_device: Device) -> GqnModelOutput {
     let combine_cat = |tensors: &[&Tensor]| {
         Tensor::cat(
-            &tensors.iter()
+            &tensors
+                .iter()
                 .map(|tensor| tensor.to_device(target_device))
                 .collect::<Vec<_>>(),
             0,
         )
     };
 
-    let combine_mean = |tensors: &[&Tensor]| {
-        combine_cat(tensors).mean2(&[], false)
-    };
+    let combine_mean = |tensors: &[&Tensor]| combine_cat(tensors).mean2(&[], false);
 
     // let tensor_to_vec = |tensor: &Tensor| {
     //     let buf_size = tensor.numel();
@@ -432,63 +447,73 @@ fn combine_gqn_outputs(outputs: Vec<GqnModelOutput>, target_device: Device) -> G
     // };
 
     let elbo_loss = combine_mean(
-        &outputs.iter()
+        &outputs
+            .iter()
             .map(|resp| &resp.elbo_loss)
-            .collect::<Vec<_>>()
+            .collect::<Vec<_>>(),
     );
 
     let target_mse = combine_mean(
-        &outputs.iter()
+        &outputs
+            .iter()
             .map(|resp| &resp.target_mse)
-            .collect::<Vec<_>>()
+            .collect::<Vec<_>>(),
     );
 
     let canvases = combine_cat(
-        &outputs.iter()
+        &outputs
+            .iter()
             .map(|resp| &resp.canvases)
-            .collect::<Vec<_>>()
+            .collect::<Vec<_>>(),
     );
 
     let target_sample = combine_cat(
-        &outputs.iter()
+        &outputs
+            .iter()
             .map(|resp| &resp.target_sample)
-            .collect::<Vec<_>>()
+            .collect::<Vec<_>>(),
     );
 
     let means_target = combine_cat(
-        &outputs.iter()
+        &outputs
+            .iter()
             .map(|resp| &resp.means_target)
-            .collect::<Vec<_>>()
+            .collect::<Vec<_>>(),
     );
 
     let stds_target = combine_cat(
-        &outputs.iter()
+        &outputs
+            .iter()
             .map(|resp| &resp.stds_target)
-            .collect::<Vec<_>>()
+            .collect::<Vec<_>>(),
     );
 
     let means_inf = combine_cat(
-        &outputs.iter()
+        &outputs
+            .iter()
             .map(|resp| &resp.means_inf)
-            .collect::<Vec<_>>()
+            .collect::<Vec<_>>(),
     );
 
     let stds_inf = combine_cat(
-        &outputs.iter()
+        &outputs
+            .iter()
             .map(|resp| &resp.stds_inf)
-            .collect::<Vec<_>>()
+            .collect::<Vec<_>>(),
     );
 
     let means_gen = combine_cat(
-        &outputs.iter()
+        &outputs
+            .iter()
             .map(|resp| &resp.means_gen)
-            .collect::<Vec<_>>()
+            .collect::<Vec<_>>(),
     );
 
     let stds_gen = combine_cat(
-        &outputs.iter()
+        &outputs
+            .iter()
             .map(|resp| &resp.stds_gen)
-            .collect::<Vec<_>>()
+            .collect::<Vec<_>>(),
     );
 
     GqnModelOutput {
@@ -523,24 +548,21 @@ fn parse_args() -> Fallible<Args> {
         None => None,
     };
     let save_steps: i64 = {
-        let arg = arg_matches.value_of("SAVE_STEPS")
-            .unwrap_or("100");
+        let arg = arg_matches.value_of("SAVE_STEPS").unwrap_or("100");
 
         let save_steps = arg.parse()?;
         ensure!(save_steps > 0, "SAVE_STEPS should be positive");
         save_steps
     };
     let log_steps: i64 = {
-        let arg = arg_matches.value_of("LOG_STEPS")
-            .unwrap_or("100");
+        let arg = arg_matches.value_of("LOG_STEPS").unwrap_or("100");
 
         let log_steps = arg.parse()?;
         ensure!(log_steps > 0, "LOG_STEPS should be positive");
         log_steps
     };
     let batch_size: usize = {
-        let arg = arg_matches.value_of("BATCH_SIZE")
-            .unwrap_or("4");
+        let arg = arg_matches.value_of("BATCH_SIZE").unwrap_or("4");
         let batch_size = arg.parse()?;
         ensure!(batch_size > 0, "BATCH_SIZE should be positive");
         batch_size
@@ -557,9 +579,7 @@ fn parse_args() -> Fallible<Args> {
         Some(arg) => {
             let mut devices = vec![];
             for token in arg.split(",") {
-                let cap = Regex::new(r"cuda\((\d+)\)$")?
-                    .captures(&token)
-                    .unwrap();
+                let cap = Regex::new(r"cuda\((\d+)\)$")?.captures(&token).unwrap();
                 let dev_index = cap[1].parse()?;
                 devices.push(Device::Cuda(dev_index));
             }
@@ -572,7 +592,10 @@ fn parse_args() -> Fallible<Args> {
             let dataset_type = match arg {
                 "gqn" => DatasetType::GQN,
                 "file" => DatasetType::File,
-                _ => bail!("DATASET_TYPE {} is not understood. It should be either 'gqn' or 'file'.", arg),
+                _ => bail!(
+                    "DATASET_TYPE {} is not understood. It should be either 'gqn' or 'file'.",
+                    arg
+                ),
             };
             dataset_type
         }
@@ -602,7 +625,7 @@ fn save_images<P: AsRef<Path>>(step: i64, combined: &GqnModelOutput, log_dir: P)
     let width = size[3];
 
     let min_val: Tensor = 255_f32.into();
-    let min_val =  min_val.to_device(combined.means_target.device());
+    let min_val = min_val.to_device(combined.means_target.device());
 
     for batch_idx in 0..batch_size {
         let result_image = (combined.means_target.select(0, batch_idx) * 255.)
@@ -610,21 +633,24 @@ fn save_images<P: AsRef<Path>>(step: i64, combined: &GqnModelOutput, log_dir: P)
             .permute(&[1, 2, 0])
             .to_kind(Kind::Uint8);
 
-        let buf_size = result_image.numel()as usize;
+        let buf_size = result_image.numel() as usize;
         let mut buf = vec![0_u8; buf_size];
         result_image.copy_data(&mut buf, buf_size as i64);
 
         let filename = format!("{:0>10}-{:0>2}.jpg", step, batch_idx);
-        ImageBuffer::<Rgb<u8>, Vec<u8>>::from_vec(width as u32, height as u32, buf).unwrap()
-            .save(log_dir.as_ref().join(filename)).unwrap();
+        ImageBuffer::<Rgb<u8>, Vec<u8>>::from_vec(width as u32, height as u32, buf)
+            .unwrap()
+            .save(log_dir.as_ref().join(filename))
+            .unwrap();
     }
-
 }
 
-fn save_model_outputs<P: AsRef<Path>>(step: i64, combined: &GqnModelOutput, log_dir: P) -> Fallible<()> {
-    let sys_time = SystemTime::now()
-        .duration_since(UNIX_EPOCH)?
-        .as_millis();
+fn save_model_outputs<P: AsRef<Path>>(
+    step: i64,
+    combined: &GqnModelOutput,
+    log_dir: P,
+) -> Fallible<()> {
+    let sys_time = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis();
 
     let filename = format!("{:0>10}-{:0>13}.zip", step, sys_time);
     let file_path = log_dir.as_ref().join(filename);
@@ -641,10 +667,7 @@ fn save_model_outputs<P: AsRef<Path>>(step: i64, combined: &GqnModelOutput, log_
         ("stds_gen", combined.stds_gen.shallow_clone()),
     ];
 
-    Tensor::save_multi(
-        &data,
-        file_path,
-    )?;
+    Tensor::save_multi(&data, file_path)?;
 
     Ok(())
 }

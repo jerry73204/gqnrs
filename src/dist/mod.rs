@@ -9,8 +9,10 @@ pub trait Rv {
     fn cdf(&self, value: &Tensor) -> Tensor;
 }
 
-pub trait KLDiv<R> where
-    R: Rv {
+pub trait KLDiv<R>
+where
+    R: Rv,
+{
     fn kl_div(&self, other: &R) -> Tensor;
 }
 
@@ -21,14 +23,11 @@ pub struct Normal<'a> {
 
 impl<'a> Normal<'a> {
     pub fn new(mean: &'a Tensor, std: &'a Tensor) -> Normal<'a> {
-        Normal {
-            mean,
-            std,
-        }
+        Normal { mean, std }
     }
 
     fn z(&self, x: &Tensor) -> Tensor {
-        (x - self.mean) /  self.std
+        (x - self.mean) / self.std
     }
 
     fn log_unnormalized_prob(&self, x: &Tensor) -> Tensor {
@@ -64,7 +63,7 @@ impl<'a> Rv for Normal<'a> {
 }
 
 impl<'a> KLDiv<Normal<'a>> for Normal<'a> {
-    fn kl_div(& self, other: & Normal) -> Tensor {
+    fn kl_div(&self, other: &Normal) -> Tensor {
         let var_a = self.std.pow(2);
         let var_b = other.std.pow(2);
         let ratio = &var_a / &var_b;
@@ -77,9 +76,9 @@ impl<'a> KLDiv<Normal<'a>> for Normal<'a> {
 mod tests {
     extern crate rv;
 
+    use super::{KLDiv, Normal, Rv};
     use rv::traits::{Cdf, ContinuousDistr};
     use tch::Tensor;
-    use super::{Rv, KLDiv, Normal};
 
     #[test]
     fn test_kl_normal_normal() {
@@ -100,7 +99,9 @@ mod tests {
             let normal2 = Normal::new(&mean2_tensor, &std2_tensor);
             let kl = normal1.kl_div(&normal2);
 
-            let true_kl = (std2 / std1).ln() + (std1.powf(2.) + (mean1 - mean2).powf(2.)) * 0.5 / std2.powf(2.) - 0.5;
+            let true_kl = (std2 / std1).ln()
+                + (std1.powf(2.) + (mean1 - mean2).powf(2.)) * 0.5 / std2.powf(2.)
+                - 0.5;
             let diff = true_kl - kl.double_value(&[]).abs();
             assert!(diff <= 1e-7);
         }
