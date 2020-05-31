@@ -1,7 +1,4 @@
-use crate::params;
-use crate::rnn;
-use std::borrow::Borrow;
-use tch::{nn, Device, Kind, Tensor};
+use crate::{common::*, rnn};
 
 pub struct GqnDecoder {
     num_layers: i64,

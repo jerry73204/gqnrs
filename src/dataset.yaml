@@ -6,7 +6,7 @@ dataset:
       test_size: 400
       frame_size: 64
       sequence_size: 11
-      num_camera_params: 5
+      # num_camera_params: 5
 
   mazes:
       frame_channels: 3
@@ -15,7 +15,7 @@ dataset:
       test_size: 120
       frame_size: 84
       sequence_size: 300
-      num_camera_params: 5
+      # num_camera_params: 5
 
   rooms_free_camera_with_object_rotations:
       frame_channels: 3
@@ -24,7 +24,7 @@ dataset:
       test_size: 226
       frame_size: 128
       sequence_size: 10
-      num_camera_params: 5
+      # num_camera_params: 5
 
   rooms_ring_camera:
       frame_channels: 3
@@ -33,7 +33,7 @@ dataset:
       test_size: 240
       frame_size: 64
       sequence_size: 10
-      num_camera_params: 5
+      # num_camera_params: 5
 
   rooms_ring_camera_debug:
       frame_channels: 3
@@ -42,7 +42,7 @@ dataset:
       test_size: 1,  # 2
       frame_size: 64
       sequence_size: 10
-      num_camera_params: 5
+      # num_camera_params: 5
 
   rooms_free_camera_no_object_rotations:
       frame_channels: 3
@@ -51,7 +51,7 @@ dataset:
       test_size: 240
       frame_size: 64
       sequence_size: 10
-      num_camera_params: 5
+      # num_camera_params: 5
 
   shepard_metzler_5_parts:
       frame_channels: 3
@@ -60,7 +60,7 @@ dataset:
       test_size: 100
       frame_size: 64
       sequence_size: 15
-      num_camera_params: 5
+      # num_camera_params: 5
 
   shepard_metzler_7_parts:
       frame_channels: 3
@@ -69,4 +69,4 @@ dataset:
       test_size: 100
       frame_size: 64
       sequence_size: 15
-      num_camera_params: 5
+      # num_camera_params: 5

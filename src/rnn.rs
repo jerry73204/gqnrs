@@ -1,5 +1,4 @@
-use std::borrow::Borrow;
-use tch::{nn, Device, Kind, Tensor};
+use crate::common::*;
 
 pub struct GqnLSTMState {
     pub h: Tensor,
@@ -9,8 +8,8 @@ pub struct GqnLSTMState {
 pub struct GqnLSTM {
     biases: bool,
     train: bool,
-    conv_ih: nn::Conv2D,
-    conv_hh: nn::Conv2D,
+    conv_ih: Conv2D,
+    conv_hh: Conv2D,
     in_channels: i64,
     out_channels: i64,
     forget_bias: f64,
@@ -30,7 +29,7 @@ impl GqnLSTM {
         let pathb = path.borrow();
 
         let hidden_channels = 4 * out_channels;
-        let conv_config = nn::ConvConfig {
+        let conv_config = ConvConfig {
             stride: 1,
             padding: (kernel_size - 1) / 2,
             bias: biases,

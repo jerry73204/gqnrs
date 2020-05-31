@@ -1,5 +1,4 @@
-use std::borrow::Borrow;
-use tch::{nn, Tensor};
+use crate::common::*;
 
 pub trait GqnEncoder {
     fn new<'a, P: Borrow<nn::Path<'a>>>(path: P, repr_channels: i64, param_channels: i64) -> Self;
@@ -119,9 +118,9 @@ impl GqnEncoder for PoolEncoder {
 
         // reduce mean of height, width dimension
         net = net
-            .view(&[batch_size, n_channels, height * width])
-            .mean2(&[2], false)
-            .view(&[batch_size, n_channels, 1, 1]);
+            .view(&[batch_size, n_channels, height * width][..])
+            .mean1(&[2], false, Kind::Float)
+            .view(&[batch_size, n_channels, 1, 1][..]);
 
         net
     }

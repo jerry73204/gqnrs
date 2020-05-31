@@ -1,4 +1,4 @@
-use tch::{nn, Kind, Tensor};
+use crate::common::*;
 
 pub fn log_ndtr(x: &Tensor) -> Tensor {
     log_ndtr_ext(x, 3)
@@ -20,9 +20,9 @@ pub fn log_ndtr_ext(x: &Tensor, series_order: i64) -> Tensor {
     let between = ndtr(&x.max1(&lower_segment)).log();
     let below_lower = log_ndtr_lower(&x.min1(&lower_segment), series_order);
 
-    above_upper.where_(
+    above_upper.where1(
         &x.gt1(&upper_segment),
-        &between.where_(&x.gt1(&lower_segment), &below_lower),
+        &between.where1(&x.gt1(&lower_segment), &below_lower),
     )
 }
 
@@ -30,9 +30,9 @@ pub fn ndtr(x: &Tensor) -> Tensor {
     let half_sqrt_2: Tensor = (0.5 * 2_f64.sqrt()).into();
     let w = x * &half_sqrt_2;
     let z = w.abs();
-    let y = (1. + w.erf()).where_(
+    let y = (1. + w.erf()).where1(
         &z.lt1(&half_sqrt_2),
-        &(2. - z.erfc()).where_(&w.gt1(&w.zeros_like()), &z.erfc()),
+        &(2. - z.erfc()).where1(&w.gt1(&w.zeros_like()), &z.erfc()),
     );
     y * 0.5
 }

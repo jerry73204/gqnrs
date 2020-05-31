@@ -1,5 +1,5 @@
+use crate::common::*;
 use crate::dist::{KLDiv, Normal, Rv};
-use tch::{nn, Tensor};
 
 pub fn elbo(
     means_target: &Tensor,
@@ -25,7 +25,9 @@ pub fn elbo(
     );
 
     let normal_target = Normal::new(means_target, stds_target);
-    let target_llh = -normal_target.log_prob(target_frame).sum2(&[1, 2, 3], false);
+    let target_llh = -normal_target
+        .log_prob(target_frame)
+        .sum1(&[1, 2, 3], false, Kind::Float);
 
     let mut kl_div_sum = None;
     for ind in 0..seq_len {
@@ -45,7 +47,7 @@ pub fn elbo(
         };
     }
 
-    let kl_regularizer = kl_div_sum.unwrap().sum2(&[1, 2, 3], false);
+    let kl_regularizer = kl_div_sum.unwrap().sum1(&[1, 2, 3], false, Kind::Float);
 
     let elbo = target_llh + kl_regularizer;
 

@@ -1,12 +1,13 @@
-use crate::decoder::{GqnDecoder, GqnDecoderOutput};
-use crate::dist::{Normal, Rv};
-use crate::encoder::{GqnEncoder, PoolEncoder, TowerEncoder};
-use crate::objective::elbo;
-use crate::params;
-use std::any::TypeId;
-use std::borrow::Borrow;
-use tch::{nn, nn::OptimizerConfig, Device, Kind, Reduction, Tensor};
+use crate::{
+    common::*,
+    decoder::{GqnDecoder, GqnDecoderOutput},
+    dist::{Normal, Rv},
+    encoder::{GqnEncoder, PoolEncoder, TowerEncoder},
+    objective::elbo,
+    params,
+};
 
+#[derive(Debug)]
 pub struct GqnModelOutput {
     pub elbo_loss: Tensor,
     pub target_mse: Tensor,
@@ -94,8 +95,8 @@ where
         };
 
         let packed_context_frames =
-            context_frames.view(&[batch_size * seq_size, channels, height, width]);
-        let packed_context_poses = context_poses.view(&[batch_size * seq_size, n_params]);
+            context_frames.view(&[batch_size * seq_size, channels, height, width][..]);
+        let packed_context_poses = context_poses.view(&[batch_size * seq_size, n_params][..]);
         let packed_representation =
             self.encoder
                 .forward_t(&packed_context_frames, &packed_context_poses, train);
@@ -105,14 +106,9 @@ where
             let repr_channels = size[1];
             let repr_height = size[2];
             let repr_width = size[3];
-            let stacked_repr = packed_representation.view(&[
-                batch_size,
-                seq_size,
-                repr_channels,
-                repr_height,
-                repr_width,
-            ]);
-            let repr = stacked_repr.sum2(&[1], false);
+            let stacked_repr = packed_representation
+                .view(&[batch_size, seq_size, repr_channels, repr_height, repr_width][..]);
+            let repr = stacked_repr.sum1(&[1], false, Kind::Float);
             repr
         };
 

@@ -1,6 +1,6 @@
-mod math;
+use crate::common::*;
 
-use tch::Tensor;
+mod math;
 
 pub trait Rv {
     fn sample(&self) -> Tensor;
@@ -41,7 +41,9 @@ impl<'a> Normal<'a> {
 
 impl<'a> Rv for Normal<'a> {
     fn sample(&self) -> Tensor {
-        Tensor::normal2(&self.mean, &self.std)
+        let out = Tensor::zeros(&[], (Kind::Float, self.mean.device()));
+        Tensor::normal_out2(&out, &self.mean, &self.std);
+        out
     }
 
     // References
