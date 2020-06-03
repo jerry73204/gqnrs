@@ -235,74 +235,105 @@ pub mod deepmind {
             Ok(stream)
         }
 
-        pub fn test_stream(&self) {
-            // Define test iterator
-            // let test_devices = devices.clone();
-            // let test_options = LoaderOptions {
-            //     check_integrity: check_integrity,
-            //     auto_close: false,
-            //     parallel: true,
-            //     open_limit: None,
-            //     method: LoaderMethod::Mmap,
-            // };
-            // let test_loader = IndexedLoader::load_ex(test_files, test_options)?;
-            // let test_iter = test_loader
-            //     .index_iter()
-            //     .cycle()
-            //     .shuffle(8192)
-            //     .load_by_tfrecord_index(test_loader)
-            //     .unwrap_result()
-            //     .par_map(|bytes| bytes_to_example(&bytes, None))
-            //     .unwrap_result()
-            //     .par_map(image_decoder)
-            //     .unwrap_result()
-            //     .par_map(preprocessor)
-            //     .batching(move |it| {
-            //         let mut buf = Vec::new();
+        pub fn test_stream(
+            &self,
+        ) -> Fallible<impl TryStream<Ok = GqnModelInput, Error = Error> + Send> {
+            let Dataset {
+                sequence_size,
+                frame_size,
+                batch_size,
+                test_dataset: dataset,
+                ..
+            } = self.clone();
 
-            //         while buf.len() < batch_size {
-            //             match it.next() {
-            //                 Some(example) => buf.push(example),
-            //                 None => break,
-            //             }
-            //         }
+            let stream = dataset.stream::<Example>();
 
-            //         if buf.is_empty() {
-            //             None
-            //         } else {
-            //             Some(make_batch(buf))
-            //         }
-            //     })
-            //     .unwrap_result()
-            //     .prefetch(512)
-            //     .enumerate()
-            //     .par_map(move |(idx, example)| {
-            //         let dev_idx = idx % test_devices.len();
-            //         let device = test_devices[dev_idx];
-            //         let new_example = match example_to_torch_tensor(example, None, device) {
-            //             Ok(ret) => ret,
-            //             Err(err) => return Err(err),
-            //         };
-            //         Ok(new_example)
-            //     })
-            //     .unwrap_result()
-            //     .batching(move |it| {
-            //         // Here assumes par_map() is ordered
-            //         let mut buf = vec![];
-            //         while buf.len() < num_devices {
-            //             match it.next() {
-            //                 Some(example) => buf.push(example),
-            //                 None => break,
-            //             }
-            //         }
+            // convert example type
+            let stream = stream
+                .map_ok(|example| GqnExample::my_from(example))
+                .err_into::<Error>();
 
-            //         if buf.is_empty() {
-            //             None
-            //         } else {
-            //             Some(buf)
-            //         }
-            //     });
-            todo!();
+            // decode image
+            let stream = stream.and_then(|in_example| {
+                async move {
+                    let out_example = async_std::task::spawn_blocking(|| {
+                        utils::decode_image_on_example(
+                            in_example,
+                            hashmap!("frames".into() => None),
+                        )
+                    })
+                    .await?;
+                    Fallible::Ok(out_example)
+                }
+            });
+
+            // preprocess and transform
+            let stream = stream.and_then(move |in_example| {
+                async move {
+                    let out_example = async_std::task::spawn_blocking(move || {
+                        preprocessor(in_example, sequence_size, frame_size)
+                    })
+                    .await?;
+                    Fallible::Ok(out_example)
+                }
+            });
+
+            // convert to tch tensors
+            let stream = stream.and_then(move |in_example| {
+                async move {
+                    let out_example = async_std::task::spawn_blocking(move || {
+                        convert_to_tensors(in_example, sequence_size, frame_size)
+                    })
+                    .await?;
+                    Fallible::Ok(out_example)
+                }
+            });
+
+            // group into batches
+            let stream = stream.chunks(batch_size).then(move |batch_of_results| {
+                async move {
+                    let batch: HashMap<String, Tensor> = batch_of_results
+                        .into_iter()
+                        .collect::<Fallible<Vec<_>>>()?
+                        .into_iter()
+                        .flat_map(|example| example.into_iter())
+                        .into_group_map()
+                        .into_iter()
+                        .map(|(name, features)| {
+                            ensure!(features.len() == batch_size);
+                            let tensors = features
+                                .into_iter()
+                                .map(|feature| match feature {
+                                    GqnFeature::Tensor(tensor) => tensor,
+                                    _ => unreachable!(),
+                                })
+                                .collect::<Vec<_>>();
+                            let batch_tensor = Tensor::stack(&tensors, 0);
+                            Ok((name, batch_tensor))
+                        })
+                        .collect::<Fallible<_>>()?;
+                    Fallible::Ok(batch)
+                }
+            });
+
+            // transform to model input type
+            let stream = stream.map_ok(move |mut in_example| {
+                let context_frames = in_example.remove("context_frames").unwrap();
+                let target_frame = in_example.remove("target_frame").unwrap();
+                let context_params = in_example.remove("context_params").unwrap();
+                let query_params = in_example.remove("query_params").unwrap();
+
+                let input = GqnModelInput {
+                    context_frames,
+                    target_frame,
+                    context_params,
+                    query_params,
+                    step: 0,
+                };
+                input
+            });
+
+            Ok(stream)
         }
     }
 
