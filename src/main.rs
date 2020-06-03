@@ -542,24 +542,6 @@ fn combine_gqn_outputs(outputs: Vec<GqnModelOutput>, target_device: Device) -> G
 //     Ok(())
 // }
 
-fn run_model(model: &GqnModel<TowerEncoder>, input: GqnModelInput, step: i64) -> GqnModelOutput {
-    let GqnModelInput {
-        context_frames,
-        target_frame,
-        context_params,
-        query_params,
-    } = input;
-
-    model.forward_t(
-        &context_frames,
-        &context_params,
-        &query_params,
-        &target_frame,
-        step,
-        true,
-    )
-}
-
 // async fn train_worker(worker_index: usize, device: Device, frame_channels: usize, param_channels: usize) -> Fallible<()> {
 //     // Load model params
 //     let mut vs = VarStore::new(device);

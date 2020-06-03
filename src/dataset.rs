@@ -114,6 +114,7 @@ pub mod deepmind {
     impl Dataset {
         pub fn train_stream(
             &self,
+            initial_step: usize,
         ) -> Fallible<impl TryStream<Ok = GqnModelInput, Error = Error> + Send> {
             let Dataset {
                 sequence_size,
@@ -205,8 +206,16 @@ pub mod deepmind {
             });
 
             // transform to model input type
-            let stream = stream.and_then(move |mut in_example| {
+            let stream = stream.scan(initial_step, move |step, result| {
+                let curr_step = *step;
+                *step += 1;
+
                 async move {
+                    let mut in_example = match result {
+                        Ok(example) => example,
+                        Err(err) => return Some(Err(err)),
+                    };
+
                     let context_frames = in_example.remove("context_frames").unwrap();
                     let target_frame = in_example.remove("target_frame").unwrap();
                     let context_params = in_example.remove("context_params").unwrap();
@@ -217,8 +226,9 @@ pub mod deepmind {
                         target_frame,
                         context_params,
                         query_params,
+                        step: curr_step,
                     };
-                    Fallible::Ok(input)
+                    Some(Fallible::Ok(input))
                 }
             });
 

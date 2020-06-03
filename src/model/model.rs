@@ -12,6 +12,7 @@ pub struct GqnModelInput {
     pub target_frame: Tensor,
     pub context_params: Tensor,
     pub query_params: Tensor,
+    pub step: usize,
 }
 
 #[derive(Debug)]
@@ -72,15 +73,15 @@ where
         }
     }
 
-    pub fn forward_t(
-        &self,
-        context_frames: &Tensor,
-        context_poses: &Tensor,
-        query_poses: &Tensor,
-        target_frame: &Tensor,
-        step: i64,
-        train: bool,
-    ) -> GqnModelOutput {
+    pub fn forward_t(&self, input: GqnModelInput, train: bool) -> GqnModelOutput {
+        let GqnModelInput {
+            context_frames,
+            target_frame,
+            context_params,
+            query_params,
+            step,
+        } = input;
+
         // Pack encoder input, melt batch and seq dimensions
         let (batch_size, seq_size, channels, height, width) = {
             let context_frames_size = context_frames.size();
@@ -93,7 +94,7 @@ where
         };
 
         let n_params = {
-            let context_poses_size = context_poses.size();
+            let context_poses_size = context_params.size();
             let batch_size2 = context_poses_size[0];
             let seq_size2 = context_poses_size[1];
             let n_params = context_poses_size[2];
@@ -103,7 +104,7 @@ where
 
         let packed_context_frames =
             context_frames.view(&[batch_size * seq_size, channels, height, width][..]);
-        let packed_context_poses = context_poses.view(&[batch_size * seq_size, n_params][..]);
+        let packed_context_poses = context_params.view(&[batch_size * seq_size, n_params][..]);
         let packed_representation =
             self.encoder
                 .forward_t(&packed_context_frames, &packed_context_poses, train);
@@ -158,7 +159,7 @@ where
             stds_gen,
         } = self
             .decoder
-            .forward_t(&broadcast_repr, query_poses, target_frame, train);
+            .forward_t(&broadcast_repr, &query_params, &target_frame, train);
 
         let stds_target = pixel_std_annealing(&means_target.size(), step, self.device);
         let target_normal = Normal::new(&means_target, &stds_target);
@@ -192,7 +193,7 @@ where
     }
 }
 
-fn pixel_std_annealing(shape: &[i64], step: i64, device: Device) -> Tensor {
+fn pixel_std_annealing(shape: &[i64], step: usize, device: Device) -> Tensor {
     let begin = params::GENERATOR_SIGMA_BEGIN;
     let end = params::GENERATOR_SIGMA_END;
     let max_step = params::ANNEAL_SIGMA_MAX;
