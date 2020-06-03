@@ -1,4 +1,5 @@
-use crate::{common::*, rnn};
+use super::rnn::{GqnLSTM, GqnLSTMState};
+use crate::common::*;
 
 pub struct GqnDecoder {
     num_layers: i64,
@@ -16,8 +17,8 @@ pub struct GqnDecoder {
     canvas_kernel_size: i64,
     target_kernel_size: i64,
 
-    generator_lstms: Vec<rnn::GqnLSTM>,
-    inference_lstms: Vec<rnn::GqnLSTM>,
+    generator_lstms: Vec<GqnLSTM>,
+    inference_lstms: Vec<GqnLSTM>,
     canvas_convs: Vec<nn::Conv2D>,
     canvas_dconvs: Vec<nn::ConvTranspose2D>,
     inf_noise_convs: Vec<nn::Conv2D>,
@@ -97,7 +98,7 @@ impl GqnDecoder {
             );
 
             // generator part
-            let gen_lstm = rnn::GqnLSTM::new(
+            let gen_lstm = GqnLSTM::new(
                 pathb / &format!("generator_lstm_{}", step),
                 biases,
                 train,
@@ -119,7 +120,7 @@ impl GqnDecoder {
             );
 
             // inference part
-            let inf_lstm = rnn::GqnLSTM::new(
+            let inf_lstm = GqnLSTM::new(
                 pathb / &format!("inference_lstm_{}", step),
                 biases,
                 train,
@@ -245,7 +246,7 @@ impl GqnDecoder {
                 Some(ref prev) => prev,
                 None => &inf_init_state,
             };
-            let rnn::GqnLSTMState {
+            let GqnLSTMState {
                 h: ref prev_inf_h,
                 c: ref prev_inf_c,
             } = prev_inf_state;
@@ -254,7 +255,7 @@ impl GqnDecoder {
                 Some(ref prev) => prev,
                 None => &gen_init_state,
             };
-            let rnn::GqnLSTMState {
+            let GqnLSTMState {
                 h: ref prev_gen_h,
                 c: ref prev_gen_c,
             } = prev_gen_state;

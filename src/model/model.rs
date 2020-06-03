@@ -1,10 +1,9 @@
+use super::{params, GqnDecoder, GqnDecoderOutput, GqnEncoder, PoolEncoder, TowerEncoder};
+
 use crate::{
     common::*,
-    decoder::{GqnDecoder, GqnDecoderOutput},
     dist::{Normal, Rv},
-    encoder::{GqnEncoder, PoolEncoder, TowerEncoder},
-    objective::elbo,
-    params,
+    objective,
 };
 
 #[derive(Debug)]
@@ -160,7 +159,7 @@ where
         let target_frame_no_grad = target_frame.set_requires_grad(false);
         let target_mse = means_target.mse_loss(&target_frame_no_grad, Reduction::None);
 
-        let elbo_loss = elbo(
+        let elbo_loss = objective::elbo(
             &means_target,
             &stds_target,
             &means_inf,

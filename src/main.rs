@@ -2,10 +2,8 @@ use gqnrs::{
     common::*,
     config::{Config, DatasetConfig, DeepMindDatasetConfig, FileDatasetConfig},
     dataset,
-    encoder::TowerEncoder,
     message::{WorkerAction, WorkerResponse},
-    model::{GqnModel, GqnModelOutput},
-    params,
+    model::{GqnModel, GqnModelOutput, TowerEncoder},
 };
 
 lazy_static::lazy_static! {
