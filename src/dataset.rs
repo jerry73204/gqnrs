@@ -290,7 +290,7 @@ pub mod deepmind {
                 _ => unreachable!(),
             }
         };
-        let (_frames_key, mut frames) = {
+        let (_frames_key, frames) = {
             let (key, value) = example.remove_entry("frames").unwrap();
             match value {
                 GqnFeature::DynamicImageList(list) => (key, list),

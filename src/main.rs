@@ -37,10 +37,11 @@ async fn main() -> Fallible<()> {
     // load config
     let config = Config::open(&args.config)?;
 
-    // Init log dir
-    if let Some(path) = &config.log_dir {
-        async_std::fs::create_dir_all(path).await?;
+    // init log dir
+    if config.logging.enabled {
+        async_std::fs::create_dir_all(&config.logging.log_dir).await?;
     }
+
     // Load dataset
     info!("Loading dataset");
 
@@ -65,8 +66,8 @@ async fn main() -> Fallible<()> {
                 frame_size,
                 sequence_size,
                 check_integrity,
-                batch_size: config.batch_size,
-                devices: config.devices,
+                batch_size: config.training.batch_size,
+                devices: &config.training.devices,
             }
             .build()
             .await?;

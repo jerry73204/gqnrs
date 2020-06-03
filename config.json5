@@ -1,0 +1,26 @@
+{
+    "logging": {
+        "enabled": true,
+        "log_dir": "logs",
+        "log_steps": 1000,
+        "save_steps": 1000,
+        "save_images": false,
+    },
+    "training": {
+        "batch_size": 64,
+        // uncomment to override
+        // "initial_step": 0,
+        // uncomment to load the pretrained weights
+        // "model_file": "model.weights",
+        // uncomment to override
+        // "devices": ["cuda(0)", "cuda(1)"],
+    },
+    "dataset": {
+        "deepmind": {
+            "base_dir": "gqn_dataset",
+            "config_file": "deepmind_dataset.yaml",
+            "dataset_name": "jaco",
+            "check_integrity": true
+        }
+    },
+}

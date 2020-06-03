@@ -2,20 +2,9 @@ use crate::common::*;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
-    pub model_file: Option<PathBuf>,
-    pub log_dir: Option<PathBuf>,
-    pub save_steps: i64,
-    pub log_steps: i64,
-    pub batch_size: NonZeroUsize,
-    pub initial_step: Option<i64>,
-    #[serde(
-        serialize_with = "serialize_devices",
-        deserialize_with = "deserialize_devices",
-        default = "default_devices"
-    )]
-    pub devices: Vec<Device>,
+    pub logging: LoggingConfig,
+    pub training: TrainingConfig,
     pub dataset: DatasetConfig,
-    pub save_images: bool,
 }
 
 impl Config {
@@ -27,6 +16,29 @@ impl Config {
         let config = json5::from_str(&text)?;
         Ok(config)
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TrainingConfig {
+    pub model_file: Option<PathBuf>,
+    pub batch_size: NonZeroUsize,
+    #[serde(default = "default_initial_step")]
+    pub initial_step: usize,
+    #[serde(
+        serialize_with = "serialize_devices",
+        deserialize_with = "deserialize_devices",
+        default = "default_devices"
+    )]
+    pub devices: Vec<Device>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LoggingConfig {
+    pub enabled: bool,
+    pub log_dir: PathBuf,
+    pub save_images: bool,
+    pub log_steps: NonZeroUsize,
+    pub save_steps: NonZeroUsize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -224,4 +236,8 @@ where
         return Err(D::Error::custom("frame_size must be at least 2"));
     }
     Ok(size)
+}
+
+fn default_initial_step() -> usize {
+    0
 }
