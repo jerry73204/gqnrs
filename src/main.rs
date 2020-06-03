@@ -3,7 +3,7 @@ use gqnrs::{
     config::{Config, DatasetConfig, DeepMindDatasetConfig, FileDatasetConfig},
     dataset,
     message::{WorkerAction, WorkerResponse},
-    model::{GqnModel, GqnModelOutput, TowerEncoder},
+    model::{GqnModel, GqnModelInput, GqnModelOutput, TowerEncoder},
 };
 
 lazy_static::lazy_static! {
@@ -542,21 +542,19 @@ fn combine_gqn_outputs(outputs: Vec<GqnModelOutput>, target_device: Device) -> G
 //     Ok(())
 // }
 
-fn run_model(
-    model: &GqnModel<TowerEncoder>,
-    example: HashMap<String, Tensor>,
-    step: i64,
-) -> GqnModelOutput {
-    let context_frames = example.get("context_frames").unwrap();
-    let target_frame = example.get("target_frame").unwrap();
-    let context_params = example.get("context_params").unwrap();
-    let query_params = example.get("query_params").unwrap();
-
-    model.forward_t(
+fn run_model(model: &GqnModel<TowerEncoder>, input: GqnModelInput, step: i64) -> GqnModelOutput {
+    let GqnModelInput {
         context_frames,
+        target_frame,
         context_params,
         query_params,
-        target_frame,
+    } = input;
+
+    model.forward_t(
+        &context_frames,
+        &context_params,
+        &query_params,
+        &target_frame,
         step,
         true,
     )

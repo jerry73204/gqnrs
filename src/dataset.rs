@@ -2,6 +2,7 @@ use crate::{
     common::*,
     convert::MyFrom,
     data::{GqnExample, GqnFeature},
+    model::GqnModelInput,
     utils,
 };
 use futures::stream::{StreamExt, TryStream, TryStreamExt};
@@ -113,7 +114,7 @@ pub mod deepmind {
     impl Dataset {
         pub fn train_stream(
             &self,
-        ) -> Fallible<impl TryStream<Ok = HashMap<String, Tensor>, Error = Error> + Send> {
+        ) -> Fallible<impl TryStream<Ok = GqnModelInput, Error = Error> + Send> {
             let Dataset {
                 sequence_size,
                 frame_size,
@@ -200,6 +201,24 @@ pub mod deepmind {
                         })
                         .collect::<Fallible<_>>()?;
                     Fallible::Ok(batch)
+                }
+            });
+
+            // transform to model input type
+            let stream = stream.and_then(move |mut in_example| {
+                async move {
+                    let context_frames = in_example.remove("context_frames").unwrap();
+                    let target_frame = in_example.remove("target_frame").unwrap();
+                    let context_params = in_example.remove("context_params").unwrap();
+                    let query_params = in_example.remove("query_params").unwrap();
+
+                    let input = GqnModelInput {
+                        context_frames,
+                        target_frame,
+                        context_params,
+                        query_params,
+                    };
+                    Fallible::Ok(input)
                 }
             });
 

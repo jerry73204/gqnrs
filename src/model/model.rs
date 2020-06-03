@@ -7,6 +7,14 @@ use crate::{
 };
 
 #[derive(Debug)]
+pub struct GqnModelInput {
+    pub context_frames: Tensor,
+    pub target_frame: Tensor,
+    pub context_params: Tensor,
+    pub query_params: Tensor,
+}
+
+#[derive(Debug)]
 pub struct GqnModelOutput {
     pub elbo_loss: Tensor,
     pub target_mse: Tensor,
