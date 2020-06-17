@@ -45,8 +45,6 @@ pub struct LoggingConfig {
 pub enum DatasetConfig {
     #[serde(rename = "deepmind")]
     DeepMind(DeepMindDatasetConfig),
-    #[serde(rename = "file")]
-    File(FileDatasetConfig),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -122,14 +120,6 @@ impl<'de> Deserialize<'de> for DeepMindDatasetConfig {
             check_integrity,
         })
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct FileDatasetConfig {
-    pub input_dir: PathBuf,
-    pub time_step: f64,
-    pub sequence_size: NonZeroUsize,
-    pub frame_size: NonZeroUsize,
 }
 
 mod deepmind_config {

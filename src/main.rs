@@ -1,6 +1,6 @@
 use gqnrs::{
     common::*,
-    config::{Config, DatasetConfig, DeepMindDatasetConfig, FileDatasetConfig},
+    config::{Config, DatasetConfig, DeepMindDatasetConfig},
     dataset,
     message::{WorkerAction, WorkerResponse},
     model::{GqnModel, GqnModelInput, GqnModelOutput, TowerEncoder},
@@ -71,20 +71,6 @@ async fn main() -> Fallible<()> {
             .await?;
             let param_channels = dataset::deepmind::NUM_CAMERA_PARAMS;
             (frame_channels, param_channels)
-        }
-        DatasetConfig::File(dataset_config) => {
-            // let file_dataset = dataset::file::FileDataset::load(
-            //     &config.input_dir,
-            //     config.batch_size,
-            //     sequence_size,
-            //     frame_size,
-            //     time_step,
-            //     config.devices.clone(),
-            // )?;
-            // let frame_channels = file_dataset.frame_channels;
-            // let param_channels = file_dataset.param_channels;
-            // (file_dataset.train_iter, frame_channels, param_channels)
-            todo!();
         }
     };
 
