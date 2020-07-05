@@ -125,6 +125,9 @@ pub mod deepmind {
             } = self.clone();
 
             let num_records = dataset.num_records();
+            if num_records == 0 {
+                bail!("dataset is empty");
+            }
 
             // sample records randomly
             let stream = futures::stream::try_unfold(
