@@ -1,6 +1,7 @@
 pub use argh::FromArgs;
 pub use derivative::Derivative;
 pub use failure::{bail, ensure, format_err, Error, Fallible};
+pub use futures::stream::{Stream, StreamExt, TryStreamExt};
 pub use image::{
     imageops::FilterType, io::Reader as ImageReader, DynamicImage, GenericImageView, ImageBuffer,
     ImageFormat, Rgb, RgbImage,
@@ -39,4 +40,4 @@ pub use tch::{
     Device, Kind, Reduction, Tensor,
 };
 pub use tfrecord::{Example, Feature};
-pub use tokio::sync::Semaphore;
+pub use tokio::sync::{broadcast, mpsc, Semaphore};

@@ -115,7 +115,7 @@ pub mod deepmind {
         pub fn train_stream(
             &self,
             initial_step: usize,
-        ) -> Fallible<impl TryStream<Ok = GqnModelInput, Error = Error> + Send> {
+        ) -> Fallible<impl Stream<Item = Fallible<GqnModelInput>> + Send> {
             let Dataset {
                 sequence_size,
                 frame_size,
@@ -235,9 +235,7 @@ pub mod deepmind {
             Ok(stream)
         }
 
-        pub fn test_stream(
-            &self,
-        ) -> Fallible<impl TryStream<Ok = GqnModelInput, Error = Error> + Send> {
+        pub fn test_stream(&self) -> Fallible<impl TryStream<Ok = GqnModelInput, Error = Error>> {
             let Dataset {
                 sequence_size,
                 frame_size,

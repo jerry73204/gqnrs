@@ -43,7 +43,7 @@ async fn main() -> Fallible<()> {
     // Load dataset
     info!("Loading dataset");
 
-    let (frame_channels, param_channels) = match config.dataset {
+    let (dataset, frame_channels, param_channels) = match config.dataset {
         DatasetConfig::DeepMind(dataset_config) => {
             let DeepMindDatasetConfig {
                 frame_channels,
@@ -69,12 +69,129 @@ async fn main() -> Fallible<()> {
             }
             .build()
             .await?;
+
             let param_channels = dataset::deepmind::NUM_CAMERA_PARAMS;
-            (frame_channels, param_channels)
+
+            (dataset, frame_channels.get(), param_channels)
         }
     };
 
     // spawn training workers
+    struct UploadMessage {}
+    struct DownloadMessage {}
+    struct DataMessage {
+        pub step: usize,
+        pub input: GqnModelInput,
+    }
+
+    let num_workers = config.training.devices.len();
+    let (upload_tx, upload_rx) = mpsc::channel::<UploadMessage>(num_workers);
+    let (download_tx, _download_rx) = broadcast::channel::<DownloadMessage>(num_workers);
+    let mut upload_rx = Some(upload_rx);
+    let (mut data_tx_set, mut data_rx_set) = (0..num_workers).fold(
+        (vec![], HashMap::new()),
+        |(mut tx_set, mut rx_set), worker_index| {
+            let (tx, rx) = mpsc::channel::<DataMessage>(1);
+            tx_set.push(tx);
+            rx_set.insert(worker_index, rx);
+            (tx_set, rx_set)
+        },
+    );
+
+    let feed_future = async move {
+        let mut train_stream = Box::pin(dataset.train_stream(0)?); // TODO: initial step
+        let mut step: usize = 0;
+
+        loop {
+            let (train_stream_, inputs) = futures::stream::iter(0..num_workers)
+                .fold(Ok((train_stream, vec![])), |result, _| {
+                    async move {
+                        let (mut stream, mut inputs) = result?;
+                        inputs.push(stream.next().await.unwrap()?);
+                        Fallible::Ok((stream, inputs))
+                    }
+                })
+                .await?;
+            train_stream = train_stream_;
+
+            for (data_tx, input) in data_tx_set.iter_mut().zip(inputs.into_iter()) {
+                if let Err(_) = data_tx.send(DataMessage { step, input }).await {
+                    panic!("please report bug");
+                }
+            }
+
+            let (step_, overflow) = step.overflowing_add(1);
+            if overflow {
+                warn!("step value overflow");
+            }
+            step = step_;
+        }
+
+        Fallible::Ok(())
+    };
+
+    let train_futures = config
+        .training
+        .devices
+        .iter()
+        .map(ToOwned::to_owned)
+        .enumerate()
+        .map(|(worker_index, device)| {
+            let is_master = worker_index == 0;
+            let mut data_rx = data_rx_set.remove(&worker_index).unwrap();
+            let (mut upload_tx_opt, mut upload_rx_opt, mut download_tx_opt, mut download_rx_opt) =
+                if is_master {
+                    (
+                        None,
+                        Some(upload_rx.take().unwrap()),
+                        Some(download_tx.clone()),
+                        None,
+                    )
+                } else {
+                    (
+                        Some(upload_tx.clone()),
+                        None,
+                        None,
+                        Some(download_tx.subscribe()),
+                    )
+                };
+
+            async move {
+                let vs = VarStore::new(device);
+                let model = {
+                    let root = vs.root();
+                    let model = GqnModel::<TowerEncoder>::new(
+                        &root,
+                        frame_channels as i64,
+                        param_channels as i64,
+                    );
+                    let _ = root.zeros("step", &[]);
+                    model
+                };
+
+                while let Some(data_msg) = data_rx.recv().await {
+                    let DataMessage { step, input } = data_msg;
+
+                    let output = model.forward_t(input, true);
+
+                    // TODO
+
+                    if is_master {
+                        let upload_rx = upload_rx_opt.as_mut().unwrap();
+                        let download_tx = download_tx_opt.as_mut().unwrap();
+                    } else {
+                        let upload_tx = upload_tx_opt.as_mut().unwrap();
+                        let download_rx = download_rx_opt.as_mut().unwrap();
+                    }
+                }
+
+                Fallible::Ok(())
+            }
+        })
+        .map(async_std::task::spawn);
+
+    futures::future::try_join(feed_future, futures::future::try_join_all(train_futures)).await?;
+
     // let train_futures = config
     //     .devices
     //     .iter()
