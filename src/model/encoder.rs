@@ -37,7 +37,7 @@ where
     let conv7 = nn::conv2d(path / "conv7", 128, 256, 3, conv_config(1, 1));
     let conv8 = nn::conv2d(path / "conv8", 256, repr_channels, 1, conv_config(0, 1));
 
-    Box::new(move |frames, poses, train| {
+    Box::new(move |frames, poses, _train| {
         let mut net = frames.apply(&conv1);
         let mut skip = net.apply(&conv2);
         net = net.apply(&conv3);

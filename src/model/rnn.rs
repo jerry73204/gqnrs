@@ -1,10 +1,21 @@
 use crate::common::*;
 
+#[derive(Debug)]
 pub struct GqnLSTMState {
     pub h: Tensor,
     pub c: Tensor,
 }
 
+impl GqnLSTMState {
+    pub fn shallow_clone(&self) -> Self {
+        Self {
+            h: self.h.shallow_clone(),
+            c: self.c.shallow_clone(),
+        }
+    }
+}
+
+#[derive(Debug)]
 pub struct GqnLSTM {
     biases: bool,
     conv_ih: Conv2D,

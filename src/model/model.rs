@@ -346,12 +346,11 @@ impl GqnModelInit {
                 let GqnDecoderOutput {
                     means_target,
                     canvases,
-                    // inf_states: Vec<rnn::GqnLSTMState>,
-                    // gen_states: Vec<rnn::GqnLSTMState>,
                     means_inf,
                     stds_inf,
                     means_gen,
                     stds_gen,
+                    ..
                 } = decoder.forward_t(&broadcast_repr, &query_params, &target_frame, train);
 
                 let stds_target = pixel_std_annealing(&means_target.size(), step, device);
