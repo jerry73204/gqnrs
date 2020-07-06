@@ -84,7 +84,9 @@ impl GqnLSTM {
         GqnLSTMState { h, c }
     }
 
-    pub fn step(&self, input: &Tensor, hx: &Tensor, cx: &Tensor) -> GqnLSTMState {
+    pub fn step(&self, input: &Tensor, prev_state: &GqnLSTMState) -> GqnLSTMState {
+        let GqnLSTMState { h: hx, c: cx } = prev_state;
+
         let gates = input.apply(&self.conv_ih) + hx.apply(&self.conv_hh);
         let mut in_gate = gates.narrow(1, 0 * self.out_channels, self.out_channels);
         let mut forget_gate = gates.narrow(1, 1 * self.out_channels, self.out_channels);
