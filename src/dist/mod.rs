@@ -16,18 +16,21 @@ where
     fn kl_div(&self, other: &R) -> Tensor;
 }
 
-pub struct Normal<'a> {
-    mean: &'a Tensor,
-    std: &'a Tensor,
+pub struct Normal {
+    mean: Tensor,
+    std: Tensor,
 }
 
-impl<'a> Normal<'a> {
-    pub fn new(mean: &'a Tensor, std: &'a Tensor) -> Normal<'a> {
+impl Normal {
+    pub fn new(mean: &Tensor, std: &Tensor) -> Normal {
+        let mean = mean.shallow_clone();
+        let std = std.shallow_clone();
+        assert_eq!(mean.size(), std.size());
         Normal { mean, std }
     }
 
     fn z(&self, x: &Tensor) -> Tensor {
-        (x - self.mean) / self.std
+        (x - &self.mean) / &self.std
     }
 
     fn log_unnormalized_prob(&self, x: &Tensor) -> Tensor {
@@ -39,11 +42,16 @@ impl<'a> Normal<'a> {
     }
 }
 
-impl<'a> Rv for Normal<'a> {
+impl Rv for Normal {
     fn sample(&self) -> Tensor {
-        let out = Tensor::zeros(&[], (Kind::Float, self.mean.device()));
-        Tensor::normal_out2(&out, &self.mean, &self.std);
-        out
+        tch::no_grad(|| {
+            let out = Tensor::zeros(
+                self.mean.size().as_slice(),
+                (Kind::Float, self.mean.device()),
+            );
+            Tensor::normal_out2(&out, &self.mean, &self.std);
+            out
+        })
     }
 
     // References
@@ -64,13 +72,13 @@ impl<'a> Rv for Normal<'a> {
     }
 }
 
-impl<'a> KLDiv<Normal<'a>> for Normal<'a> {
+impl KLDiv<Normal> for Normal {
     fn kl_div(&self, other: &Normal) -> Tensor {
         let var_a = self.std.pow(2);
         let var_b = other.std.pow(2);
         let ratio = &var_a / &var_b;
 
-        (self.mean - other.mean).pow(2) / (2. * var_b) + 0.5 * (&ratio - 1 - ratio.log())
+        (&self.mean - &other.mean).pow(2) / (2. * var_b) + 0.5 * (&ratio - 1 - ratio.log())
     }
 }
 

@@ -442,7 +442,9 @@ pub mod deepmind {
                         let array =
                             Array3::from_shape_vec((frame_size, frame_size, 3), image.into_vec())?
                                 .permuted_axes([2, 0, 1]) // HWC to CHW
-                                .map(|component| *component as f32 / 255.0);
+                                .map(|component| *component as f32 / 255.0)
+                                .as_standard_layout()
+                                .to_owned();
                         Tensor::try_from(array)?
                     }
                     GqnFeature::RgbImageList(list) => {
@@ -454,7 +456,9 @@ pub mod deepmind {
                                     image.into_vec(),
                                 )?
                                 .permuted_axes([2, 0, 1]) // HWC to CHW
-                                .map(|component| *component as f32 / 255.0);
+                                .map(|component| *component as f32 / 255.0)
+                                .as_standard_layout()
+                                .to_owned();
                                 let tensor = Tensor::try_from(array)?;
                                 Ok(tensor)
                             })

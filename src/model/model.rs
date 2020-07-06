@@ -15,6 +15,26 @@ pub struct GqnModelInput {
     pub step: usize,
 }
 
+impl GqnModelInput {
+    pub fn to_device(&self, device: Device) -> Self {
+        let Self {
+            context_frames,
+            target_frame,
+            context_params,
+            query_params,
+            step,
+        } = self;
+
+        Self {
+            context_frames: context_frames.to_device(device),
+            target_frame: target_frame.to_device(device),
+            context_params: context_params.to_device(device),
+            query_params: query_params.to_device(device),
+            step: *step,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct GqnModelOutput {
     pub elbo_loss: Tensor,
@@ -27,6 +47,136 @@ pub struct GqnModelOutput {
     pub stds_inf: Tensor,
     pub means_gen: Tensor,
     pub stds_gen: Tensor,
+}
+
+impl GqnModelOutput {
+    pub fn to_device(&self, device: Device) -> Self {
+        let Self {
+            elbo_loss,
+            target_mse,
+            target_sample,
+            means_target,
+            stds_target,
+            canvases,
+            means_inf,
+            stds_inf,
+            means_gen,
+            stds_gen,
+        } = self;
+
+        Self {
+            elbo_loss: elbo_loss.to_device(device),
+            target_mse: target_mse.to_device(device),
+            target_sample: target_sample.to_device(device),
+            means_target: means_target.to_device(device),
+            stds_target: stds_target.to_device(device),
+            canvases: canvases.to_device(device),
+            means_inf: means_inf.to_device(device),
+            stds_inf: stds_inf.to_device(device),
+            means_gen: means_gen.to_device(device),
+            stds_gen: stds_gen.to_device(device),
+        }
+    }
+
+    pub fn shallow_clone(&self) -> Self {
+        let Self {
+            elbo_loss,
+            target_mse,
+            target_sample,
+            means_target,
+            stds_target,
+            canvases,
+            means_inf,
+            stds_inf,
+            means_gen,
+            stds_gen,
+        } = self;
+
+        Self {
+            elbo_loss: elbo_loss.shallow_clone(),
+            target_mse: target_mse.shallow_clone(),
+            target_sample: target_sample.shallow_clone(),
+            means_target: means_target.shallow_clone(),
+            stds_target: stds_target.shallow_clone(),
+            canvases: canvases.shallow_clone(),
+            means_inf: means_inf.shallow_clone(),
+            stds_inf: stds_inf.shallow_clone(),
+            means_gen: means_gen.shallow_clone(),
+            stds_gen: stds_gen.shallow_clone(),
+        }
+    }
+
+    pub fn cat<T>(outputs: &[T]) -> Self
+    where
+        T: Borrow<Self>,
+    {
+        let outputs = outputs.iter().map(|out| out.borrow()).collect::<Vec<_>>();
+        let elbo_loss = Tensor::cat(
+            &outputs.iter().map(|out| &out.elbo_loss).collect::<Vec<_>>(),
+            0,
+        );
+        let target_mse = Tensor::cat(
+            &outputs
+                .iter()
+                .map(|out| &out.target_mse)
+                .collect::<Vec<_>>(),
+            0,
+        );
+        let target_sample = Tensor::cat(
+            &outputs
+                .iter()
+                .map(|out| &out.target_sample)
+                .collect::<Vec<_>>(),
+            0,
+        );
+        let means_target = Tensor::cat(
+            &outputs
+                .iter()
+                .map(|out| &out.means_target)
+                .collect::<Vec<_>>(),
+            0,
+        );
+        let stds_target = Tensor::cat(
+            &outputs
+                .iter()
+                .map(|out| &out.stds_target)
+                .collect::<Vec<_>>(),
+            0,
+        );
+        let canvases = Tensor::cat(
+            &outputs.iter().map(|out| &out.canvases).collect::<Vec<_>>(),
+            0,
+        );
+        let means_inf = Tensor::cat(
+            &outputs.iter().map(|out| &out.means_inf).collect::<Vec<_>>(),
+            0,
+        );
+        let stds_inf = Tensor::cat(
+            &outputs.iter().map(|out| &out.stds_inf).collect::<Vec<_>>(),
+            0,
+        );
+        let means_gen = Tensor::cat(
+            &outputs.iter().map(|out| &out.means_gen).collect::<Vec<_>>(),
+            0,
+        );
+        let stds_gen = Tensor::cat(
+            &outputs.iter().map(|out| &out.stds_gen).collect::<Vec<_>>(),
+            0,
+        );
+
+        Self {
+            elbo_loss,
+            target_mse,
+            target_sample,
+            means_target,
+            stds_target,
+            canvases,
+            means_inf,
+            stds_inf,
+            means_gen,
+            stds_gen,
+        }
+    }
 }
 
 pub struct GqnModel<E: GqnEncoder> {
