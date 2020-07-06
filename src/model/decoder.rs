@@ -33,7 +33,6 @@ impl GqnDecoder {
         // model params
         num_layers: i64,
         biases: bool,
-        train: bool,
         // channels
         repr_channels: i64,
         param_channels: i64,
@@ -49,7 +48,7 @@ impl GqnDecoder {
     where
         P: Borrow<nn::Path<'a>>,
     {
-        let pathb = path.borrow();
+        let path = path.borrow();
 
         let canvas_conv_input_channels = target_channels + canvas_channels;
         let gen_input_channels = repr_channels + param_channels + noise_channels;
@@ -65,7 +64,7 @@ impl GqnDecoder {
         for step in 0..num_layers {
             // noise part
             let inf_noise_conv = nn::conv2d(
-                pathb / &format!("inf_noise_conv_{}", step),
+                path / &format!("inf_noise_conv_{}", step),
                 cell_output_channels,
                 2 * noise_channels,
                 cell_kernel_size,
@@ -77,7 +76,7 @@ impl GqnDecoder {
             );
 
             let gen_noise_conv = nn::conv2d(
-                pathb / &format!("gen_noise_conv_{}", step),
+                path / &format!("gen_noise_conv_{}", step),
                 cell_output_channels,
                 2 * noise_channels,
                 cell_kernel_size,
@@ -90,9 +89,8 @@ impl GqnDecoder {
 
             // generator part
             let gen_lstm = GqnLSTM::new(
-                pathb / &format!("generator_lstm_{}", step),
+                path / &format!("generator_lstm_{}", step),
                 biases,
-                train,
                 gen_input_channels,
                 cell_output_channels,
                 cell_kernel_size,
@@ -100,7 +98,7 @@ impl GqnDecoder {
             );
 
             let dconv = nn::conv_transpose2d(
-                pathb / &format!("canvas_dconv_{}", step),
+                path / &format!("canvas_dconv_{}", step),
                 cell_output_channels,
                 canvas_channels,
                 canvas_kernel_size,
@@ -112,9 +110,8 @@ impl GqnDecoder {
 
             // inference part
             let inf_lstm = GqnLSTM::new(
-                pathb / &format!("inference_lstm_{}", step),
+                path / &format!("inference_lstm_{}", step),
                 biases,
-                train,
                 inf_input_channels,
                 cell_output_channels,
                 cell_kernel_size,
@@ -122,7 +119,7 @@ impl GqnDecoder {
             );
 
             let conv = nn::conv2d(
-                pathb / &format!("canvas_conv_{}", step),
+                path / &format!("canvas_conv_{}", step),
                 canvas_conv_input_channels,
                 cell_output_channels,
                 canvas_kernel_size,
@@ -143,7 +140,7 @@ impl GqnDecoder {
         }
 
         let target_conv = nn::conv2d(
-            pathb / "target_conv",
+            path / "target_conv",
             canvas_channels,
             target_channels,
             target_kernel_size,
@@ -157,7 +154,7 @@ impl GqnDecoder {
         GqnDecoder {
             num_layers,
             biases,
-            device: pathb.device(),
+            device: path.device(),
 
             repr_channels,
             param_channels,
@@ -230,7 +227,7 @@ impl GqnDecoder {
         let mut stds_gen = Vec::new();
 
         // Chain the LSTM cells
-        for step in 0..(self.num_layers) {
+        for step in 0..(self.num_layers as usize) {
             // Extract tensors from previous step
             let prev_inf_state = match inf_states.last() {
                 Some(ref prev) => prev,
@@ -256,8 +253,8 @@ impl GqnDecoder {
             };
 
             // Inference part
-            let inf_lstm = &self.inference_lstms[step as usize];
-            let canvas_conv = &self.canvas_convs[step as usize];
+            let inf_lstm = &self.inference_lstms[step];
+            let canvas_conv = &self.canvas_convs[step];
 
             let inf_h_extra = Tensor::cat(&[target_frame, prev_canvas], 1).apply(canvas_conv);
             let inf_h_combined = prev_inf_h + inf_h_extra;
@@ -271,14 +268,14 @@ impl GqnDecoder {
             // Create noise tensor
             // We have different random source for training/eval mode
             let (mean_inf, std_inf, noise_inf) =
-                self.make_noise(prev_inf_h, &self.inf_noise_convs[step as usize]);
+                self.make_noise(prev_inf_h, &self.inf_noise_convs[step]);
             let (mean_gen, std_gen, noise_gen) =
-                self.make_noise(prev_gen_h, &self.gen_noise_convs[step as usize]);
+                self.make_noise(prev_gen_h, &self.gen_noise_convs[step]);
             let input_noise = if train { noise_inf } else { noise_gen };
 
             // generator part
-            let gen_lstm = &self.generator_lstms[step as usize];
-            let canvas_dconv = &self.canvas_dconvs[step as usize];
+            let gen_lstm = &self.generator_lstms[step];
+            let canvas_dconv = &self.canvas_dconvs[step];
 
             let gen_input = Tensor::cat(&[representation, &broadcasted_poses, &input_noise], 1);
             let gen_state = gen_lstm.step(&gen_input, prev_gen_h, prev_gen_c);

@@ -7,7 +7,6 @@ pub struct GqnLSTMState {
 
 pub struct GqnLSTM {
     biases: bool,
-    train: bool,
     conv_ih: Conv2D,
     conv_hh: Conv2D,
     in_channels: i64,
@@ -17,16 +16,18 @@ pub struct GqnLSTM {
 }
 
 impl GqnLSTM {
-    pub fn new<'a, P: Borrow<nn::Path<'a>>>(
+    pub fn new<'p, P>(
         path: P,
         biases: bool,
-        train: bool,
         in_channels: i64,
         out_channels: i64,
         kernel_size: i64,
         forget_bias: f64,
-    ) -> GqnLSTM {
-        let pathb = path.borrow();
+    ) -> GqnLSTM
+    where
+        P: Borrow<nn::Path<'p>>,
+    {
+        let path = path.borrow();
 
         let hidden_channels = 4 * out_channels;
         let conv_config = ConvConfig {
@@ -37,24 +38,23 @@ impl GqnLSTM {
         };
 
         let conv_ih = nn::conv2d(
-            pathb / "conv_ih",
+            path / "conv_ih",
             in_channels,
             hidden_channels,
             kernel_size,
             conv_config,
         );
         let conv_hh = nn::conv2d(
-            pathb / "conv_hh",
+            path / "conv_hh",
             out_channels,
             hidden_channels,
             kernel_size,
             conv_config,
         );
-        let device = pathb.device();
+        let device = path.device();
 
         GqnLSTM {
             biases,
-            train,
             conv_ih,
             conv_hh,
             in_channels,

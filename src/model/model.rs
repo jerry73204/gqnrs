@@ -254,7 +254,6 @@ impl GqnModelInit {
             path / "decoder", // path
             seq_len,          // num layers
             true,             // biases
-            true,             // train
             enc_channels,
             param_channels,
             noise_channels,
