@@ -4,7 +4,6 @@ use crate::common::*;
 pub struct GqnDecoder {
     num_layers: i64,
     biases: bool,
-    train: bool,
 
     repr_channels: i64,
     param_channels: i64,
@@ -28,19 +27,8 @@ pub struct GqnDecoder {
     device: Device,
 }
 
-pub struct GqnDecoderOutput {
-    pub means_target: Tensor,
-    pub canvases: Tensor,
-    // pub inf_states: Vec<rnn::GqnLSTMState>,
-    // pub gen_states: Vec<rnn::GqnLSTMState>,
-    pub means_inf: Tensor,
-    pub stds_inf: Tensor,
-    pub means_gen: Tensor,
-    pub stds_gen: Tensor,
-}
-
 impl GqnDecoder {
-    pub fn new<'a, P: Borrow<nn::Path<'a>>>(
+    pub fn new<'a, P>(
         path: P,
         // model params
         num_layers: i64,
@@ -57,7 +45,10 @@ impl GqnDecoder {
         cell_kernel_size: i64,
         canvas_kernel_size: i64,
         target_kernel_size: i64,
-    ) -> GqnDecoder {
+    ) -> GqnDecoder
+    where
+        P: Borrow<nn::Path<'a>>,
+    {
         let pathb = path.borrow();
 
         let canvas_conv_input_channels = target_channels + canvas_channels;
@@ -166,7 +157,6 @@ impl GqnDecoder {
         GqnDecoder {
             num_layers,
             biases,
-            train,
             device: pathb.device(),
 
             repr_channels,
@@ -196,7 +186,7 @@ impl GqnDecoder {
         representation: &Tensor,
         query_poses: &Tensor,
         target_frame: &Tensor,
-        _train: bool,
+        train: bool,
     ) -> GqnDecoderOutput {
         let (batch_size, repr_height, repr_width) = {
             let repr_size = representation.size();
@@ -284,7 +274,7 @@ impl GqnDecoder {
                 self.make_noise(prev_inf_h, &self.inf_noise_convs[step as usize]);
             let (mean_gen, std_gen, noise_gen) =
                 self.make_noise(prev_gen_h, &self.gen_noise_convs[step as usize]);
-            let input_noise = if self.train { noise_inf } else { noise_gen };
+            let input_noise = if train { noise_inf } else { noise_gen };
 
             // generator part
             let gen_lstm = &self.generator_lstms[step as usize];
@@ -358,4 +348,15 @@ impl GqnDecoder {
             .reshape(&[batch_size, self.param_channels, 1, 1])
             .repeat(&[1, 1, height, width])
     }
+}
+
+pub struct GqnDecoderOutput {
+    pub means_target: Tensor,
+    pub canvases: Tensor,
+    // pub inf_states: Vec<rnn::GqnLSTMState>,
+    // pub gen_states: Vec<rnn::GqnLSTMState>,
+    pub means_inf: Tensor,
+    pub stds_inf: Tensor,
+    pub means_gen: Tensor,
+    pub stds_gen: Tensor,
 }

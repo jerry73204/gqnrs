@@ -1,4 +1,7 @@
-use super::{params, GqnDecoder, GqnDecoderOutput, GqnEncoder, PoolEncoder, TowerEncoder};
+use super::{
+    decoder::{GqnDecoder, GqnDecoderOutput},
+    encoder, params,
+};
 
 use crate::{
     common::*,
@@ -179,167 +182,210 @@ impl GqnModelOutput {
     }
 }
 
-pub struct GqnModel<E: GqnEncoder> {
-    encoder: E,
-    decoder: GqnDecoder,
-    device: Device,
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum GqnEncoderKind {
+    Tower,
+    Pool,
 }
 
-impl<E: 'static> GqnModel<E>
-where
-    E: GqnEncoder,
-{
-    pub fn new<'a, P: Borrow<nn::Path<'a>>>(
-        path: P,
-        frame_channels: i64,
-        param_channels: i64,
-    ) -> GqnModel<E> {
-        let pathb = path.borrow();
+#[derive(Debug, Clone)]
+pub struct GqnModelInit {
+    pub frame_channels: i64,
+    pub param_channels: i64,
+    pub encoder_kind: GqnEncoderKind,
+    pub seq_len: i64,
+    pub enc_channels: i64,
+    pub noise_channels: i64,
+    pub lstm_output_channels: i64,
+    pub lstm_canvas_channels: i64,
+    pub lstm_kernel_size: i64,
+    pub eta_internal_kernel_size: i64,
+    pub eta_external_kernel_size: i64,
+}
 
-        let encoder = E::new(pathb / "encoder", params::ENC_CHANNELS, param_channels);
-
-        let decoder = GqnDecoder::new(
-            pathb / "decoder",  // path
-            params::SEQ_LENGTH, // num layers
-            true,               // biases
-            true,               // train
-            params::ENC_CHANNELS,
-            param_channels,
-            params::Z_CHANNELS,
-            params::LSTM_OUTPUT_CHANNELS,
-            params::LSTM_CANVAS_CHANNELS,
+impl GqnModelInit {
+    pub fn new(frame_channels: i64, param_channels: i64) -> Self {
+        Self {
             frame_channels,
-            params::LSTM_KERNEL_SIZE,
-            params::ETA_INTERNAL_KERNEL_SIZE,
-            params::ETA_EXTERNAL_KERNEL_SIZE,
-        );
-
-        let device = pathb.device();
-
-        GqnModel {
-            encoder,
-            decoder,
-            device,
+            param_channels,
+            encoder_kind: GqnEncoderKind::Tower,
+            seq_len: params::SEQ_LENGTH,
+            enc_channels: params::ENC_CHANNELS,
+            noise_channels: params::Z_CHANNELS,
+            lstm_output_channels: params::LSTM_OUTPUT_CHANNELS,
+            lstm_canvas_channels: params::LSTM_CANVAS_CHANNELS,
+            lstm_kernel_size: params::LSTM_KERNEL_SIZE,
+            eta_internal_kernel_size: params::ETA_INTERNAL_KERNEL_SIZE,
+            eta_external_kernel_size: params::ETA_EXTERNAL_KERNEL_SIZE,
         }
     }
 
-    pub fn forward_t(&self, input: GqnModelInput, train: bool) -> GqnModelOutput {
-        let GqnModelInput {
-            context_frames,
-            target_frame,
-            context_params,
-            query_params,
-            step,
-        } = input;
+    pub fn build<'p, P>(self, path: P) -> Box<dyn Fn(&GqnModelInput, bool) -> GqnModelOutput + Send>
+    where
+        P: Borrow<nn::Path<'p>>,
+    {
+        let path = path.borrow();
+        let device = path.device();
 
-        // Pack encoder input, melt batch and seq dimensions
-        let (batch_size, seq_size, channels, height, width) = {
-            let context_frames_size = context_frames.size();
-            let batch_size = context_frames_size[0];
-            let seq_size = context_frames_size[1];
-            let channels = context_frames_size[2];
-            let height = context_frames_size[3];
-            let width = context_frames_size[4];
-            (batch_size, seq_size, channels, height, width)
-        };
+        let Self {
+            frame_channels,
+            param_channels,
+            encoder_kind,
+            seq_len,
+            enc_channels,
+            noise_channels,
+            lstm_output_channels,
+            lstm_canvas_channels,
+            lstm_kernel_size,
+            eta_internal_kernel_size,
+            eta_external_kernel_size,
+        } = self;
 
-        let n_params = {
-            let context_poses_size = context_params.size();
-            let batch_size2 = context_poses_size[0];
-            let seq_size2 = context_poses_size[1];
-            let n_params = context_poses_size[2];
-            assert!(batch_size == batch_size2 && seq_size == seq_size2);
-            n_params
-        };
-
-        let packed_context_frames =
-            context_frames.view(&[batch_size * seq_size, channels, height, width][..]);
-        let packed_context_poses = context_params.view(&[batch_size * seq_size, n_params][..]);
-        let packed_representation =
-            self.encoder
-                .forward_t(&packed_context_frames, &packed_context_poses, train);
-
-        let representation = {
-            let size = packed_representation.size();
-            let repr_channels = size[1];
-            let repr_height = size[2];
-            let repr_width = size[3];
-            let stacked_repr = packed_representation
-                .view(&[batch_size, seq_size, repr_channels, repr_height, repr_width][..]);
-            let repr = stacked_repr.sum1(&[1], false, Kind::Float);
-            repr
-        };
-
-        // Broadcast encoding
-        let broadcast_repr = {
-            let encoder_type = TypeId::of::<E>();
-
-            if encoder_type == TypeId::of::<TowerEncoder>() {
-                let repr_size = representation.size();
-                let repr_height = repr_size[2];
-                let repr_width = repr_size[3];
-
-                let target_size = target_frame.size();
-                let target_height = target_size[2];
-                let target_width = target_size[3];
-
-                assert!(target_height == repr_height * 4 && target_width == repr_width * 4);
-                representation
-            } else if encoder_type == TypeId::of::<PoolEncoder>() {
-                let target_size = target_frame.size();
-                let target_height = target_size[2];
-                let target_width = target_size[3];
-                let repr_height = target_height / 4;
-                let repr_width = target_width / 4;
-
-                representation.repeat(&[1, 1, repr_height, repr_width])
-            } else {
-                panic!("bug");
+        let encoder = match encoder_kind {
+            GqnEncoderKind::Tower => {
+                encoder::tower_encoder(path / "encoder", enc_channels, param_channels)
+            }
+            GqnEncoderKind::Pool => {
+                encoder::pool_encoder(path / "encoder", enc_channels, param_channels)
             }
         };
 
-        let GqnDecoderOutput {
-            means_target,
-            canvases,
-            // inf_states: Vec<rnn::GqnLSTMState>,
-            // gen_states: Vec<rnn::GqnLSTMState>,
-            means_inf,
-            stds_inf,
-            means_gen,
-            stds_gen,
-        } = self
-            .decoder
-            .forward_t(&broadcast_repr, &query_params, &target_frame, train);
-
-        let stds_target = pixel_std_annealing(&means_target.size(), step, self.device);
-        let target_normal = Normal::new(&means_target, &stds_target);
-        let target_sample = target_normal.sample();
-
-        let target_frame_no_grad = target_frame.set_requires_grad(false);
-        let target_mse = means_target.mse_loss(&target_frame_no_grad, Reduction::None);
-
-        let elbo_loss = objective::elbo(
-            &means_target,
-            &stds_target,
-            &means_inf,
-            &stds_inf,
-            &means_gen,
-            &stds_gen,
-            &target_frame_no_grad,
+        let decoder = GqnDecoder::new(
+            path / "decoder", // path
+            seq_len,          // num layers
+            true,             // biases
+            true,             // train
+            enc_channels,
+            param_channels,
+            noise_channels,
+            lstm_output_channels,
+            lstm_canvas_channels,
+            frame_channels,
+            lstm_kernel_size,
+            eta_internal_kernel_size,
+            eta_external_kernel_size,
         );
 
-        GqnModelOutput {
-            elbo_loss,
-            target_mse,
-            means_target,
-            stds_target,
-            target_sample,
-            canvases,
-            means_inf,
-            stds_inf,
-            means_gen,
-            stds_gen,
-        }
+        Box::new(
+            move |input: &GqnModelInput, train: bool| -> GqnModelOutput {
+                let GqnModelInput {
+                    context_frames,
+                    target_frame,
+                    context_params,
+                    query_params,
+                    step,
+                } = input;
+                let step = *step;
+
+                // Pack encoder input, melt batch and seq dimensions
+                let (batch_size, seq_size, channels, height, width) = {
+                    let context_frames_size = context_frames.size();
+                    let batch_size = context_frames_size[0];
+                    let seq_size = context_frames_size[1];
+                    let channels = context_frames_size[2];
+                    let height = context_frames_size[3];
+                    let width = context_frames_size[4];
+                    (batch_size, seq_size, channels, height, width)
+                };
+
+                let n_params = {
+                    let context_poses_size = context_params.size();
+                    let batch_size2 = context_poses_size[0];
+                    let seq_size2 = context_poses_size[1];
+                    let n_params = context_poses_size[2];
+                    assert!(batch_size == batch_size2 && seq_size == seq_size2);
+                    n_params
+                };
+
+                let packed_context_frames =
+                    context_frames.view(&[batch_size * seq_size, channels, height, width][..]);
+                let packed_context_poses =
+                    context_params.view(&[batch_size * seq_size, n_params][..]);
+                let packed_representation =
+                    encoder(&packed_context_frames, &packed_context_poses, train);
+
+                let representation = {
+                    let size = packed_representation.size();
+                    let repr_channels = size[1];
+                    let repr_height = size[2];
+                    let repr_width = size[3];
+                    let stacked_repr = packed_representation
+                        .view(&[batch_size, seq_size, repr_channels, repr_height, repr_width][..]);
+                    let repr = stacked_repr.sum1(&[1], false, Kind::Float);
+                    repr
+                };
+
+                // Broadcast encoding
+                let broadcast_repr = {
+                    match encoder_kind {
+                        GqnEncoderKind::Tower => {
+                            let repr_size = representation.size();
+                            let repr_height = repr_size[2];
+                            let repr_width = repr_size[3];
+
+                            let target_size = target_frame.size();
+                            let target_height = target_size[2];
+                            let target_width = target_size[3];
+
+                            assert!(
+                                target_height == repr_height * 4 && target_width == repr_width * 4
+                            );
+                            representation
+                        }
+                        GqnEncoderKind::Pool => {
+                            let target_size = target_frame.size();
+                            let target_height = target_size[2];
+                            let target_width = target_size[3];
+                            let repr_height = target_height / 4;
+                            let repr_width = target_width / 4;
+
+                            representation.repeat(&[1, 1, repr_height, repr_width])
+                        }
+                    }
+                };
+
+                let GqnDecoderOutput {
+                    means_target,
+                    canvases,
+                    // inf_states: Vec<rnn::GqnLSTMState>,
+                    // gen_states: Vec<rnn::GqnLSTMState>,
+                    means_inf,
+                    stds_inf,
+                    means_gen,
+                    stds_gen,
+                } = decoder.forward_t(&broadcast_repr, &query_params, &target_frame, train);
+
+                let stds_target = pixel_std_annealing(&means_target.size(), step, device);
+                let target_normal = Normal::new(&means_target, &stds_target);
+                let target_sample = target_normal.sample();
+
+                let target_frame_no_grad = target_frame.set_requires_grad(false);
+                let target_mse = means_target.mse_loss(&target_frame_no_grad, Reduction::None);
+
+                let elbo_loss = objective::elbo(
+                    &means_target,
+                    &stds_target,
+                    &means_inf,
+                    &stds_inf,
+                    &means_gen,
+                    &stds_gen,
+                    &target_frame_no_grad,
+                );
+
+                GqnModelOutput {
+                    elbo_loss,
+                    target_mse,
+                    means_target,
+                    stds_target,
+                    target_sample,
+                    canvases,
+                    means_inf,
+                    stds_inf,
+                    means_gen,
+                    stds_gen,
+                }
+            },
+        )
     }
 }
 
