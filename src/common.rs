@@ -6,7 +6,7 @@ pub use image::{
     imageops::FilterType, io::Reader as ImageReader, DynamicImage, GenericImageView, ImageBuffer,
     ImageFormat, Rgb, RgbImage,
 };
-pub use itertools::Itertools;
+pub use itertools::{izip, Itertools};
 pub use log::{debug, error, info, warn};
 pub use maplit::hashmap;
 pub use ndarray::{s, stack, Array2, Array3, ArrayBase, Axis};
