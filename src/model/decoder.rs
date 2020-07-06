@@ -1,6 +1,59 @@
 use super::rnn::{GqnLSTM, GqnLSTMState};
 use crate::common::*;
 
+#[derive(Debug)]
+pub struct GqnNoiseFactory {
+    in_c: i64,
+    out_c: i64,
+    conv: nn::Conv2D,
+}
+
+impl GqnNoiseFactory {
+    pub fn new<'p, P>(path: P, in_c: i64, out_c: i64, k: i64) -> Self
+    where
+        P: Borrow<nn::Path<'p>>,
+    {
+        let path = path.borrow();
+
+        let conv = nn::conv2d(
+            path / "conv",
+            in_c,
+            out_c * 2,
+            k,
+            nn::ConvConfig {
+                padding: (k - 1) / 2,
+                stride: 1,
+                ..Default::default()
+            },
+        );
+
+        Self { in_c, out_c, conv }
+    }
+
+    pub fn forward(&self, hidden: &Tensor) -> GqnNoise {
+        // Eta function
+        let conv_hidden = hidden.apply(&self.conv);
+        let means = conv_hidden.narrow(1, 0, self.out_c);
+        let stds = {
+            let tmp = conv_hidden.narrow(1, self.out_c, self.out_c);
+            (tmp + 0.5).softplus() + 1e-8
+        };
+        let scales = Tensor::randn(&means.size(), (Kind::Float, means.device()));
+
+        // Compute noise
+        let noise = &means + &stds * &scales;
+
+        GqnNoise { means, stds, noise }
+    }
+}
+
+#[derive(Debug)]
+pub struct GqnNoise {
+    pub means: Tensor,
+    pub stds: Tensor,
+    pub noise: Tensor,
+}
+
 #[derive(Debug, Clone)]
 pub struct GqnDecoderCellInit {
     pub cell_output_channels: i64,
@@ -15,7 +68,7 @@ pub struct GqnDecoderCellInit {
 }
 
 impl GqnDecoderCellInit {
-    pub fn build<'p, P>(self, path: P, step: i64) -> GqnDecoderCell
+    pub fn build<'p, P>(self, path: P) -> GqnDecoderCell
     where
         P: Borrow<nn::Path<'p>>,
     {
@@ -34,33 +87,22 @@ impl GqnDecoderCellInit {
         } = self;
 
         // noise part
-        let inf_noise_conv = nn::conv2d(
-            path / &format!("inf_noise_conv_{}", step),
+        let inf_noise_factory = GqnNoiseFactory::new(
+            path / "inf_noise",
             cell_output_channels,
-            2 * noise_channels,
+            noise_channels,
             cell_kernel_size,
-            nn::ConvConfig {
-                padding: (cell_kernel_size - 1) / 2,
-                stride: 1,
-                ..Default::default()
-            },
         );
-
-        let gen_noise_conv = nn::conv2d(
-            path / &format!("gen_noise_conv_{}", step),
+        let gen_noise_factory = GqnNoiseFactory::new(
+            path / "gen_noise",
             cell_output_channels,
-            2 * noise_channels,
+            noise_channels,
             cell_kernel_size,
-            nn::ConvConfig {
-                padding: (cell_kernel_size - 1) / 2,
-                stride: 1,
-                ..Default::default()
-            },
         );
 
         // generator part
         let gen_lstm = GqnLSTM::new(
-            path / &format!("generator_lstm_{}", step),
+            path / "generator_lstm",
             biases,
             gen_input_channels,
             cell_output_channels,
@@ -69,7 +111,7 @@ impl GqnDecoderCellInit {
         );
 
         let canvas_dconv = nn::conv_transpose2d(
-            path / &format!("canvas_dconv_{}", step),
+            path / "canvas_dconv",
             cell_output_channels,
             canvas_channels,
             canvas_kernel_size,
@@ -81,7 +123,7 @@ impl GqnDecoderCellInit {
 
         // inference part
         let inf_lstm = GqnLSTM::new(
-            path / &format!("inference_lstm_{}", step),
+            path / "inference_lstm",
             biases,
             inf_input_channels,
             cell_output_channels,
@@ -90,7 +132,7 @@ impl GqnDecoderCellInit {
         );
 
         let canvas_conv = nn::conv2d(
-            path / &format!("canvas_conv_{}", step),
+            path / "canvas_conv",
             canvas_conv_input_channels,
             cell_output_channels,
             canvas_kernel_size,
@@ -103,8 +145,11 @@ impl GqnDecoderCellInit {
         );
 
         GqnDecoderCell {
-            inf_noise_conv,
-            gen_noise_conv,
+            // params
+            canvas_channels,
+            // modules
+            inf_noise_factory,
+            gen_noise_factory,
             gen_lstm,
             canvas_dconv,
             inf_lstm,
@@ -115,17 +160,120 @@ impl GqnDecoderCellInit {
 
 #[derive(Debug)]
 pub struct GqnDecoderCell {
+    // params
+    canvas_channels: i64,
+    // modules
     gen_lstm: GqnLSTM,
     inf_lstm: GqnLSTM,
     canvas_conv: nn::Conv2D,
     canvas_dconv: nn::ConvTranspose2D,
-    inf_noise_conv: nn::Conv2D,
-    gen_noise_conv: nn::Conv2D,
+    inf_noise_factory: GqnNoiseFactory,
+    gen_noise_factory: GqnNoiseFactory,
 }
 
 impl GqnDecoderCell {
-    pub fn step() -> GqnDecoderCellState {
-        todo!();
+    pub fn step(
+        &self,
+        target_frame: &Tensor,
+        representation: &Tensor,
+        broadcasted_poses: &Tensor,
+        prev_state: &GqnDecoderCellState,
+        train: bool,
+    ) -> (GqnDecoderCellState, GqnNoise, GqnNoise) {
+        let (target_height, target_width) = match target_frame.size().as_slice() {
+            &[_batch_size_, _channels, height, width] => (height, width),
+            _ => unreachable!(),
+        };
+
+        let GqnDecoderCellState {
+            inf_state: prev_inf_state,
+            gen_state: prev_gen_state,
+            canvas: prev_canvas,
+        } = prev_state;
+
+        let inf_h_extra = Tensor::cat(&[target_frame, &prev_canvas], 1).apply(&self.canvas_conv);
+        let inf_h_combined = &prev_inf_state.h + &inf_h_extra;
+        // debug_assert!(prev_gen_state.h.size()[1] == self.cell_output_channels);
+
+        let inf_input = Tensor::cat(&[representation, &broadcasted_poses, &prev_gen_state.h], 1);
+        let inf_state = self.inf_lstm.step(
+            &inf_input,
+            &GqnLSTMState {
+                h: inf_h_combined,
+                c: prev_inf_state.c.shallow_clone(),
+            },
+        );
+
+        // Create noise tensor
+        // We have different random source for training/eval mode
+        let inf_noise = self.inf_noise_factory.forward(&prev_inf_state.h);
+        let gen_noise = self.gen_noise_factory.forward(&prev_gen_state.h);
+        let input_noise = if train {
+            &inf_noise.noise
+        } else {
+            &gen_noise.noise
+        };
+
+        // generator part
+        let gen_input = Tensor::cat(&[representation, &broadcasted_poses, input_noise], 1);
+        let gen_state = self.gen_lstm.step(&gen_input, &prev_gen_state);
+        let gen_output = &gen_state.h;
+
+        let canvas_extra = gen_output
+            .apply(&self.canvas_dconv)
+            .narrow(2, 0, target_height)
+            .narrow(3, 0, target_width); // Crop out extra width/height due to deconvolution
+        let canvas = prev_canvas + canvas_extra;
+
+        (
+            GqnDecoderCellState {
+                canvas,
+                gen_state,
+                inf_state,
+            },
+            inf_noise,
+            gen_noise,
+        )
+    }
+
+    pub fn zero_state(
+        &self,
+        target_frame: &Tensor,
+        representation: &Tensor,
+    ) -> GqnDecoderCellState {
+        let (batch_size, repr_height, repr_width) = match representation.size().as_slice() {
+            &[batch_size, channels, height, width] => (batch_size, height, width),
+            _ => unreachable!(),
+        };
+        let (target_height, target_width) = match target_frame.size().as_slice() {
+            &[batch_size_, channels, height, width] => {
+                debug_assert_eq!(batch_size, batch_size_);
+                (height, width)
+            }
+            _ => unreachable!(),
+        };
+
+        let inf_state = self
+            .inf_lstm
+            .zero_state(batch_size, repr_height, repr_width);
+        let gen_state = self
+            .gen_lstm
+            .zero_state(batch_size, repr_height, repr_width);
+        let canvas = Tensor::zeros(
+            &[
+                batch_size,
+                self.canvas_channels,
+                target_height,
+                target_width,
+            ],
+            (Kind::Float, representation.device()),
+        );
+
+        GqnDecoderCellState {
+            inf_state,
+            gen_state,
+            canvas,
+        }
     }
 }
 
@@ -133,10 +281,6 @@ pub struct GqnDecoderCellState {
     pub inf_state: GqnLSTMState,
     pub gen_state: GqnLSTMState,
     pub canvas: Tensor,
-    pub mean_inf: Tensor,
-    pub std_inf: Tensor,
-    pub mean_gen: Tensor,
-    pub std_gen: Tensor,
 }
 
 #[derive(Debug)]
@@ -198,7 +342,7 @@ impl GqnDecoder {
                     canvas_conv_input_channels,
                     inf_input_channels,
                 }
-                .build(path, step)
+                .build(path / format!("decoder_cell_{}", step))
             })
             .collect::<Vec<_>>();
 
@@ -241,16 +385,16 @@ impl GqnDecoder {
         train: bool,
     ) -> GqnDecoderOutput {
         let (batch_size, repr_height, repr_width) = match representation.size().as_slice() {
-            &[batch_size, repr_channels, repr_height, repr_width] => {
-                debug_assert_eq!(repr_channels, self.repr_channels);
-                (batch_size, repr_height, repr_width)
+            &[batch_size, channels, height, width] => {
+                debug_assert_eq!(channels, self.repr_channels);
+                (batch_size, height, width)
             }
             _ => unreachable!(),
         };
-        let (_target_channels, target_height, target_width) = match target_frame.size().as_slice() {
-            &[batch_size_, target_channels, target_height, target_width] => {
+        let (target_height, target_width) = match target_frame.size().as_slice() {
+            &[batch_size_, channels, height, width] => {
                 debug_assert_eq!(batch_size, batch_size_);
-                (target_channels, target_height, target_width)
+                (height, width)
             }
             _ => unreachable!(),
         };
@@ -261,100 +405,33 @@ impl GqnDecoder {
             }
             _ => unreachable!(),
         }
+
         let broadcasted_poses = self.broadcast_poses(query_poses, repr_height, repr_width);
+        let init_decoder_cell_state =
+            self.decoder_cells[0].zero_state(target_frame, representation);
 
-        let inf_init_state =
-            self.decoder_cells[0]
-                .inf_lstm
-                .zero_state(batch_size, repr_height, repr_width);
-        let gen_init_state =
-            self.decoder_cells[0]
-                .gen_lstm
-                .zero_state(batch_size, repr_height, repr_width);
-        let init_canvas = Tensor::zeros(
-            &[
-                batch_size,
-                self.canvas_channels,
-                target_height,
-                target_width,
-            ],
-            (Kind::Float, self.device),
-        );
+        let (states, inf_noises, gen_noises) =
+            self.decoder_cells
+                .iter()
+                .fold((vec![], vec![], vec![]), |mut args, cell| {
+                    let (states, inf_noises, gen_noises) = &mut args;
+                    let prev_state: &GqnDecoderCellState =
+                        states.last().unwrap_or(&init_decoder_cell_state);
 
-        let states: Vec<GqnDecoderCellState> =
-            self.decoder_cells.iter().fold(vec![], |mut states, cell| {
-                let GqnDecoderCell {
-                    gen_lstm,
-                    inf_lstm,
-                    canvas_conv,
-                    canvas_dconv,
-                    inf_noise_conv,
-                    gen_noise_conv,
-                } = cell;
+                    let (state, inf_noise, gen_noise) = cell.step(
+                        target_frame,
+                        representation,
+                        &broadcasted_poses,
+                        prev_state,
+                        train,
+                    );
 
-                // Extract tensors from previous step
-                let (prev_inf_state, prev_gen_state, prev_canvas) = states
-                    .last()
-                    .map(|state| {
-                        (
-                            state.inf_state.shallow_clone(),
-                            state.inf_state.shallow_clone(),
-                            state.canvas.shallow_clone(),
-                        )
-                    })
-                    .unwrap_or_else(|| {
-                        (
-                            inf_init_state.shallow_clone(),
-                            gen_init_state.shallow_clone(),
-                            init_canvas.shallow_clone(),
-                        )
-                    });
+                    states.push(state);
+                    inf_noises.push(inf_noise);
+                    gen_noises.push(gen_noise);
 
-                // Inference part
-                let inf_h_extra = Tensor::cat(&[target_frame, &prev_canvas], 1).apply(canvas_conv);
-                let inf_h_combined = &prev_inf_state.h + &inf_h_extra;
-                debug_assert!(prev_gen_state.h.size()[1] == self.cell_output_channels);
-
-                let inf_input =
-                    Tensor::cat(&[representation, &broadcasted_poses, &prev_gen_state.h], 1);
-                let inf_state = inf_lstm.step(
-                    &inf_input,
-                    &GqnLSTMState {
-                        h: inf_h_combined,
-                        c: prev_inf_state.c,
-                    },
-                );
-
-                // Create noise tensor
-                // We have different random source for training/eval mode
-                let (mean_inf, std_inf, noise_inf) =
-                    self.make_noise(&prev_inf_state.h, inf_noise_conv);
-                let (mean_gen, std_gen, noise_gen) =
-                    self.make_noise(&prev_gen_state.h, gen_noise_conv);
-                let input_noise = if train { noise_inf } else { noise_gen };
-
-                // generator part
-                let gen_input = Tensor::cat(&[representation, &broadcasted_poses, &input_noise], 1);
-                let gen_state = gen_lstm.step(&gen_input, &prev_gen_state);
-                let gen_output = &gen_state.h;
-
-                let canvas_extra = gen_output
-                    .apply(canvas_dconv)
-                    .narrow(2, 0, target_height)
-                    .narrow(3, 0, target_width); // Crop out extra width/height due to deconvolution
-                let canvas = prev_canvas + canvas_extra;
-
-                states.push(GqnDecoderCellState {
-                    canvas,
-                    gen_state,
-                    inf_state,
-                    mean_inf,
-                    std_inf,
-                    mean_gen,
-                    std_gen,
+                    args
                 });
-                states
-            });
 
         let means_target = states.last().unwrap().canvas.apply(&self.target_conv);
         let canvases = Tensor::stack(
@@ -362,30 +439,30 @@ impl GqnDecoder {
             1,
         );
         let means_inf = Tensor::stack(
-            &states
+            &inf_noises
                 .iter()
-                .map(|state| &state.mean_inf)
+                .map(|noise| &noise.means)
                 .collect::<Vec<_>>(),
             1,
         );
         let stds_inf = Tensor::stack(
-            &states
+            &inf_noises
                 .iter()
-                .map(|state| &state.std_inf)
+                .map(|noise| &noise.stds)
                 .collect::<Vec<_>>(),
             1,
         );
         let means_gen = Tensor::stack(
-            &states
+            &gen_noises
                 .iter()
-                .map(|state| &state.mean_gen)
+                .map(|noise| &noise.means)
                 .collect::<Vec<_>>(),
             1,
         );
         let stds_gen = Tensor::stack(
-            &states
+            &gen_noises
                 .iter()
-                .map(|state| &state.std_gen)
+                .map(|noise| &noise.stds)
                 .collect::<Vec<_>>(),
             1,
         );
@@ -411,10 +488,10 @@ impl GqnDecoder {
     }
 
     fn make_noise(&self, hidden: &Tensor, conv: &nn::Conv2D) -> (Tensor, Tensor, Tensor) {
-        let hidden_size = hidden.size();
-        let batch_size = hidden_size[0];
-        let hidden_height = hidden_size[2];
-        let hidden_width = hidden_size[3];
+        let (batch_size, hidden_height, hidden_width) = match hidden.size().as_slice() {
+            &[batch_size, _channels, height, width] => (batch_size, height, width),
+            _ => unreachable!(),
+        };
 
         // Eta function
         let conv_hidden = hidden.apply(conv);
