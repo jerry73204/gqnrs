@@ -2,7 +2,6 @@ use gqnrs::{
     common::*,
     config::{Config, DatasetConfig, DeepMindDatasetConfig},
     dataset,
-    message::{WorkerAction, WorkerResponse},
     model::{GqnModelInit, GqnModelInput, GqnModelOutput},
 };
 
@@ -573,111 +572,6 @@ async fn main() -> Fallible<()> {
     // }
 
     Ok(())
-}
-
-fn combine_gqn_outputs(outputs: Vec<GqnModelOutput>, target_device: Device) -> GqnModelOutput {
-    let combine_cat = |tensors: &[&Tensor]| {
-        Tensor::cat(
-            &tensors
-                .iter()
-                .map(|tensor| tensor.to_device(target_device))
-                .collect::<Vec<_>>(),
-            0,
-        )
-    };
-
-    let combine_mean =
-        |tensors: &[&Tensor]| combine_cat(tensors).mean1(&[], false, tensors[0].kind());
-
-    // let tensor_to_vec = |tensor: &Tensor| {
-    //     let buf_size = tensor.numel();
-    //     let mut buf = vec![0_f32; buf_size as usize];
-    //     tensor.copy_data(&mut buf, buf_size);
-    //     buf
-    // };
-
-    let elbo_loss = combine_mean(
-        &outputs
-            .iter()
-            .map(|resp| &resp.elbo_loss)
-            .collect::<Vec<_>>(),
-    );
-
-    let target_mse = combine_mean(
-        &outputs
-            .iter()
-            .map(|resp| &resp.target_mse)
-            .collect::<Vec<_>>(),
-    );
-
-    let canvases = combine_cat(
-        &outputs
-            .iter()
-            .map(|resp| &resp.canvases)
-            .collect::<Vec<_>>(),
-    );
-
-    let target_sample = combine_cat(
-        &outputs
-            .iter()
-            .map(|resp| &resp.target_sample)
-            .collect::<Vec<_>>(),
-    );
-
-    let means_target = combine_cat(
-        &outputs
-            .iter()
-            .map(|resp| &resp.means_target)
-            .collect::<Vec<_>>(),
-    );
-
-    let stds_target = combine_cat(
-        &outputs
-            .iter()
-            .map(|resp| &resp.stds_target)
-            .collect::<Vec<_>>(),
-    );
-
-    let means_inf = combine_cat(
-        &outputs
-            .iter()
-            .map(|resp| &resp.means_inf)
-            .collect::<Vec<_>>(),
-    );
-
-    let stds_inf = combine_cat(
-        &outputs
-            .iter()
-            .map(|resp| &resp.stds_inf)
-            .collect::<Vec<_>>(),
-    );
-
-    let means_gen = combine_cat(
-        &outputs
-            .iter()
-            .map(|resp| &resp.means_gen)
-            .collect::<Vec<_>>(),
-    );
-
-    let stds_gen = combine_cat(
-        &outputs
-            .iter()
-            .map(|resp| &resp.stds_gen)
-            .collect::<Vec<_>>(),
-    );
-
-    GqnModelOutput {
-        elbo_loss,
-        target_mse,
-        target_sample,
-        means_target,
-        stds_target,
-        canvases,
-        means_inf,
-        stds_inf,
-        means_gen,
-        stds_gen,
-    }
 }
 
 // fn save_images<P: AsRef<Path>>(step: i64, combined: &GqnModelOutput, log_dir: P) {

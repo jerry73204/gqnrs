@@ -49,8 +49,7 @@ impl Rv for Normal {
                 self.mean.size().as_slice(),
                 (Kind::Float, self.mean.device()),
             );
-            Tensor::normal_out2(&out, &self.mean, &self.std);
-            out
+            Tensor::normal_out2(&out, &self.mean, &self.std)
         })
     }
 
