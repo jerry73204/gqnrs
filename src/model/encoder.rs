@@ -74,7 +74,8 @@ pub fn pool_encoder<'p, P>(
 where
     P: Borrow<nn::Path<'p>>,
 {
-    let tower_encoder = tower_encoder(path, repr_channels, param_channels);
+    let path = path.borrow();
+    let tower_encoder = tower_encoder(path / "tower_encoder", repr_channels, param_channels);
 
     Box::new(move |frames, poses, train| {
         let mut net = tower_encoder(frames, poses, train);

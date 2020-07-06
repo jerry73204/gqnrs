@@ -1,55 +1,45 @@
 use crate::common::*;
-use crate::dist::{KLDiv, Normal, Rv};
+use crate::{
+    dist::{KLDiv, Normal, Rv},
+    model::rnn::GqnNoise,
+};
 
-pub fn elbo(
-    means_target: &Tensor,
-    stds_target: &Tensor,
-    means_inf: &Tensor,
-    stds_inf: &Tensor,
-    means_gen: &Tensor,
-    stds_gen: &Tensor,
+pub fn elbo<N1, N2>(
     target_frame: &Tensor,
-) -> Tensor {
-    let seq_len = {
-        let size = means_inf.size();
-        assert!(size.len() == 5);
-        size[1]
-    };
-
-    // Assume batch first and equal seq length
-    assert!(
-        seq_len == means_inf.size()[1]
-            && seq_len == stds_inf.size()[1]
-            && seq_len == means_gen.size()[1]
-            && seq_len == stds_gen.size()[1]
-    );
-
-    let normal_target = Normal::new(means_target, stds_target);
-    let target_llh = -normal_target
+    target_mean: &Tensor,
+    target_std: &Tensor,
+    inf_noises: &[N1],
+    gen_noises: &[N2],
+) -> Tensor
+where
+    N1: Borrow<GqnNoise>,
+    N2: Borrow<GqnNoise>,
+{
+    let target_llh = -Normal::new(target_mean, target_std)
         .log_prob(target_frame)
         .sum1(&[1, 2, 3], false, Kind::Float);
 
-    let mut kl_div_sum = None;
-    for ind in 0..seq_len {
-        let means_inf_l = means_inf.select(1, ind);
-        let stds_inf_l = stds_inf.select(1, ind);
-        let normal_inf_l = Normal::new(&means_inf_l, &stds_inf_l);
+    let kl_regularizer = {
+        let kl_div_sum = inf_noises
+            .iter()
+            .zip_eq(gen_noises.iter())
+            .map(|(inf_noise, gen_noise)| {
+                let inf_noise = inf_noise.borrow();
+                let gen_noise = gen_noise.borrow();
 
-        let means_gen_l = means_gen.select(1, ind);
-        let stds_gen_l = stds_gen.select(1, ind);
-        let normal_gen_l = Normal::new(&means_gen_l, &stds_gen_l);
+                let inf_normal = Normal::new(&inf_noise.means, &inf_noise.stds);
+                let gen_normal = Normal::new(&gen_noise.means, &gen_noise.stds);
 
-        let kl_div_l = normal_inf_l.kl_div(&normal_gen_l);
+                let kl_div = inf_normal.kl_div(&gen_normal);
+                kl_div
+            })
+            .fold1(|lhs, rhs| lhs + rhs)
+            .unwrap();
+        let kl_regularizer = kl_div_sum.sum1(&[1, 2, 3], false, Kind::Float);
+        kl_regularizer
+    };
 
-        kl_div_sum = match kl_div_sum {
-            Some(sum) => Some(sum + kl_div_l),
-            None => Some(kl_div_l),
-        };
-    }
+    let elbo_loss = target_llh + kl_regularizer;
 
-    let kl_regularizer = kl_div_sum.unwrap().sum1(&[1, 2, 3], false, Kind::Float);
-
-    let elbo = target_llh + kl_regularizer;
-
-    elbo
+    elbo_loss
 }

@@ -1,4 +1,4 @@
-use super::rnn::{GqnDecoderCell, GqnDecoderCellInit, GqnDecoderCellState, GqnLSTMState};
+use super::rnn::{GqnDecoderCell, GqnDecoderCellInit, GqnDecoderCellState, GqnNoise};
 use crate::common::*;
 
 #[derive(Debug)]
@@ -122,7 +122,7 @@ impl GqnDecoder {
         let init_decoder_cell_state =
             self.decoder_cells[0].zero_state(target_frame, representation);
 
-        let (states, inf_noises, gen_noises) =
+        let (decoder_states, inf_noises, gen_noises) =
             self.decoder_cells
                 .iter()
                 .fold((vec![], vec![], vec![]), |mut args, cell| {
@@ -145,68 +145,25 @@ impl GqnDecoder {
                     args
                 });
 
-        let means_target = states.last().unwrap().canvas.apply(&self.target_conv);
-        let canvases = Tensor::stack(
-            &states.iter().map(|state| &state.canvas).collect::<Vec<_>>(),
-            1,
-        );
-        let means_inf = Tensor::stack(
-            &inf_noises
-                .iter()
-                .map(|noise| &noise.means)
-                .collect::<Vec<_>>(),
-            1,
-        );
-        let stds_inf = Tensor::stack(
-            &inf_noises
-                .iter()
-                .map(|noise| &noise.stds)
-                .collect::<Vec<_>>(),
-            1,
-        );
-        let means_gen = Tensor::stack(
-            &gen_noises
-                .iter()
-                .map(|noise| &noise.means)
-                .collect::<Vec<_>>(),
-            1,
-        );
-        let stds_gen = Tensor::stack(
-            &gen_noises
-                .iter()
-                .map(|noise| &noise.stds)
-                .collect::<Vec<_>>(),
-            1,
-        );
-        let inf_states = states
-            .iter()
-            .map(|state| state.inf_state.shallow_clone())
-            .collect::<Vec<_>>();
-        let gen_states = states
-            .iter()
-            .map(|state| state.gen_state.shallow_clone())
-            .collect::<Vec<_>>();
+        // compute target mean from last canvas
+        let target_mean = decoder_states
+            .last()
+            .unwrap()
+            .canvas
+            .apply(&self.target_conv);
 
         GqnDecoderOutput {
-            means_target,
-            canvases,
-            inf_states,
-            gen_states,
-            means_inf,
-            stds_inf,
-            means_gen,
-            stds_gen,
+            target_mean,
+            decoder_states,
+            inf_noises,
+            gen_noises,
         }
     }
 }
 
 pub struct GqnDecoderOutput {
-    pub means_target: Tensor,
-    pub canvases: Tensor,
-    pub inf_states: Vec<GqnLSTMState>,
-    pub gen_states: Vec<GqnLSTMState>,
-    pub means_inf: Tensor,
-    pub stds_inf: Tensor,
-    pub means_gen: Tensor,
-    pub stds_gen: Tensor,
+    pub target_mean: Tensor,
+    pub decoder_states: Vec<GqnDecoderCellState>,
+    pub inf_noises: Vec<GqnNoise>,
+    pub gen_noises: Vec<GqnNoise>,
 }

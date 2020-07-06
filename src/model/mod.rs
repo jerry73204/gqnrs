@@ -1,7 +1,7 @@
-mod decoder;
-mod encoder;
-mod model;
+pub mod decoder;
+pub mod encoder;
+pub mod model;
 pub mod params;
-mod rnn;
+pub mod rnn;
 
 pub use model::{GqnModelInit, GqnModelInput, GqnModelOutput};

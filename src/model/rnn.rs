@@ -9,6 +9,13 @@ pub struct GqnLSTMState {
 }
 
 impl GqnLSTMState {
+    pub fn to_device(&self, device: Device) -> Self {
+        Self {
+            h: self.h.to_device(device),
+            c: self.c.to_device(device),
+        }
+    }
+
     pub fn shallow_clone(&self) -> Self {
         Self {
             h: self.h.shallow_clone(),
@@ -383,6 +390,36 @@ pub struct GqnDecoderCellState {
     pub canvas: Tensor,
 }
 
+impl GqnDecoderCellState {
+    pub fn to_device(&self, device: Device) -> Self {
+        let Self {
+            inf_state,
+            gen_state,
+            canvas,
+        } = self;
+
+        Self {
+            inf_state: inf_state.to_device(device),
+            gen_state: gen_state.to_device(device),
+            canvas: canvas.to_device(device),
+        }
+    }
+
+    pub fn shallow_clone(&self) -> Self {
+        let Self {
+            inf_state,
+            gen_state,
+            canvas,
+        } = self;
+
+        Self {
+            inf_state: inf_state.shallow_clone(),
+            gen_state: gen_state.shallow_clone(),
+            canvas: canvas.shallow_clone(),
+        }
+    }
+}
+
 // noise
 #[derive(Debug)]
 pub struct GqnNoiseFactory {
@@ -435,4 +472,26 @@ pub struct GqnNoise {
     pub means: Tensor,
     pub stds: Tensor,
     pub noise: Tensor,
+}
+
+impl GqnNoise {
+    pub fn to_device(&self, device: Device) -> Self {
+        let Self { means, stds, noise } = self;
+
+        Self {
+            means: means.to_device(device),
+            stds: stds.to_device(device),
+            noise: noise.to_device(device),
+        }
+    }
+
+    pub fn shallow_clone(&self) -> Self {
+        let Self { means, stds, noise } = self;
+
+        Self {
+            means: means.shallow_clone(),
+            stds: stds.shallow_clone(),
+            noise: noise.shallow_clone(),
+        }
+    }
 }

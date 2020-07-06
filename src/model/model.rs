@@ -1,6 +1,7 @@
 use super::{
     decoder::{GqnDecoder, GqnDecoderOutput},
     encoder, params,
+    rnn::{GqnDecoderCellState, GqnNoise},
 };
 
 use crate::{
@@ -8,6 +9,8 @@ use crate::{
     dist::{Normal, Rv},
     objective,
 };
+
+// input type
 
 #[derive(Debug)]
 pub struct GqnModelInput {
@@ -38,18 +41,21 @@ impl GqnModelInput {
     }
 }
 
+// output type
+
 #[derive(Debug)]
 pub struct GqnModelOutput {
+    // losses
     pub elbo_loss: Tensor,
     pub target_mse: Tensor,
+    // target sample
     pub target_sample: Tensor,
-    pub means_target: Tensor,
-    pub stds_target: Tensor,
-    pub canvases: Tensor,
-    pub means_inf: Tensor,
-    pub stds_inf: Tensor,
-    pub means_gen: Tensor,
-    pub stds_gen: Tensor,
+    pub target_mean: Tensor,
+    pub target_std: Tensor,
+    // states
+    pub decoder_states: Vec<GqnDecoderCellState>,
+    pub inf_noises: Vec<GqnNoise>,
+    pub gen_noises: Vec<GqnNoise>,
 }
 
 impl GqnModelOutput {
@@ -58,26 +64,31 @@ impl GqnModelOutput {
             elbo_loss,
             target_mse,
             target_sample,
-            means_target,
-            stds_target,
-            canvases,
-            means_inf,
-            stds_inf,
-            means_gen,
-            stds_gen,
+            target_mean,
+            target_std,
+            decoder_states,
+            inf_noises,
+            gen_noises,
         } = self;
 
         Self {
             elbo_loss: elbo_loss.to_device(device),
             target_mse: target_mse.to_device(device),
             target_sample: target_sample.to_device(device),
-            means_target: means_target.to_device(device),
-            stds_target: stds_target.to_device(device),
-            canvases: canvases.to_device(device),
-            means_inf: means_inf.to_device(device),
-            stds_inf: stds_inf.to_device(device),
-            means_gen: means_gen.to_device(device),
-            stds_gen: stds_gen.to_device(device),
+            target_mean: target_mean.to_device(device),
+            target_std: target_std.to_device(device),
+            decoder_states: decoder_states
+                .iter()
+                .map(|state| state.to_device(device))
+                .collect(),
+            inf_noises: inf_noises
+                .iter()
+                .map(|noise| noise.to_device(device))
+                .collect(),
+            gen_noises: gen_noises
+                .iter()
+                .map(|noise| noise.to_device(device))
+                .collect(),
         }
     }
 
@@ -86,98 +97,31 @@ impl GqnModelOutput {
             elbo_loss,
             target_mse,
             target_sample,
-            means_target,
-            stds_target,
-            canvases,
-            means_inf,
-            stds_inf,
-            means_gen,
-            stds_gen,
+            target_mean,
+            target_std,
+            decoder_states,
+            inf_noises,
+            gen_noises,
         } = self;
 
         Self {
             elbo_loss: elbo_loss.shallow_clone(),
             target_mse: target_mse.shallow_clone(),
             target_sample: target_sample.shallow_clone(),
-            means_target: means_target.shallow_clone(),
-            stds_target: stds_target.shallow_clone(),
-            canvases: canvases.shallow_clone(),
-            means_inf: means_inf.shallow_clone(),
-            stds_inf: stds_inf.shallow_clone(),
-            means_gen: means_gen.shallow_clone(),
-            stds_gen: stds_gen.shallow_clone(),
-        }
-    }
-
-    pub fn cat<T>(outputs: &[T]) -> Self
-    where
-        T: Borrow<Self>,
-    {
-        let outputs = outputs.iter().map(|out| out.borrow()).collect::<Vec<_>>();
-        let elbo_loss = Tensor::cat(
-            &outputs.iter().map(|out| &out.elbo_loss).collect::<Vec<_>>(),
-            0,
-        );
-        let target_mse = Tensor::cat(
-            &outputs
+            target_mean: target_mean.shallow_clone(),
+            target_std: target_std.shallow_clone(),
+            decoder_states: decoder_states
                 .iter()
-                .map(|out| &out.target_mse)
-                .collect::<Vec<_>>(),
-            0,
-        );
-        let target_sample = Tensor::cat(
-            &outputs
+                .map(|state| state.shallow_clone())
+                .collect(),
+            inf_noises: inf_noises
                 .iter()
-                .map(|out| &out.target_sample)
-                .collect::<Vec<_>>(),
-            0,
-        );
-        let means_target = Tensor::cat(
-            &outputs
+                .map(|noise| noise.shallow_clone())
+                .collect(),
+            gen_noises: gen_noises
                 .iter()
-                .map(|out| &out.means_target)
-                .collect::<Vec<_>>(),
-            0,
-        );
-        let stds_target = Tensor::cat(
-            &outputs
-                .iter()
-                .map(|out| &out.stds_target)
-                .collect::<Vec<_>>(),
-            0,
-        );
-        let canvases = Tensor::cat(
-            &outputs.iter().map(|out| &out.canvases).collect::<Vec<_>>(),
-            0,
-        );
-        let means_inf = Tensor::cat(
-            &outputs.iter().map(|out| &out.means_inf).collect::<Vec<_>>(),
-            0,
-        );
-        let stds_inf = Tensor::cat(
-            &outputs.iter().map(|out| &out.stds_inf).collect::<Vec<_>>(),
-            0,
-        );
-        let means_gen = Tensor::cat(
-            &outputs.iter().map(|out| &out.means_gen).collect::<Vec<_>>(),
-            0,
-        );
-        let stds_gen = Tensor::cat(
-            &outputs.iter().map(|out| &out.stds_gen).collect::<Vec<_>>(),
-            0,
-        );
-
-        Self {
-            elbo_loss,
-            target_mse,
-            target_sample,
-            means_target,
-            stds_target,
-            canvases,
-            means_inf,
-            stds_inf,
-            means_gen,
-            stds_gen,
+                .map(|noise| noise.shallow_clone())
+                .collect(),
         }
     }
 }
@@ -243,10 +187,10 @@ impl GqnModelInit {
 
         let encoder = match encoder_kind {
             GqnEncoderKind::Tower => {
-                encoder::tower_encoder(path / "encoder", enc_channels, param_channels)
+                encoder::tower_encoder(path / "tower_encoder", enc_channels, param_channels)
             }
             GqnEncoderKind::Pool => {
-                encoder::pool_encoder(path / "encoder", enc_channels, param_channels)
+                encoder::pool_encoder(path / "pool_encoder", enc_channels, param_channels)
             }
         };
 
@@ -274,6 +218,7 @@ impl GqnModelInit {
                     query_params,
                     step,
                 } = input;
+                let target_frame = target_frame.set_requires_grad(false);
                 let step = *step;
 
                 // Pack encoder input, melt batch and seq dimensions
@@ -344,43 +289,40 @@ impl GqnModelInit {
                 };
 
                 let GqnDecoderOutput {
-                    means_target,
-                    canvases,
-                    means_inf,
-                    stds_inf,
-                    means_gen,
-                    stds_gen,
-                    ..
+                    target_mean,
+                    decoder_states,
+                    inf_noises,
+                    gen_noises,
                 } = decoder.forward_t(&broadcast_repr, &query_params, &target_frame, train);
 
-                let stds_target = pixel_std_annealing(&means_target.size(), step, device);
-                let target_normal = Normal::new(&means_target, &stds_target);
-                let target_sample = target_normal.sample();
+                // sample target
+                let target_std = pixel_std_annealing(&target_mean.size(), step, device);
+                let target_sample = Normal::new(&target_mean, &target_std).sample();
 
-                let target_frame_no_grad = target_frame.set_requires_grad(false);
-                let target_mse = means_target.mse_loss(&target_frame_no_grad, Reduction::None);
+                // compute target loss
+                let target_mse = target_mean.mse_loss(&target_frame, Reduction::Mean);
 
+                // compute elbo loss
                 let elbo_loss = objective::elbo(
-                    &means_target,
-                    &stds_target,
-                    &means_inf,
-                    &stds_inf,
-                    &means_gen,
-                    &stds_gen,
-                    &target_frame_no_grad,
+                    &target_frame,
+                    &target_mean,
+                    &target_std,
+                    &inf_noises,
+                    &gen_noises,
                 );
 
                 GqnModelOutput {
+                    // losses
                     elbo_loss,
                     target_mse,
-                    means_target,
-                    stds_target,
+                    // target sample
+                    target_mean,
+                    target_std,
                     target_sample,
-                    canvases,
-                    means_inf,
-                    stds_inf,
-                    means_gen,
-                    stds_gen,
+                    // states
+                    decoder_states,
+                    inf_noises,
+                    gen_noises,
                 }
             },
         )
