@@ -1,6 +1,6 @@
+pub use anyhow::{bail, ensure, format_err, Error, Result};
 pub use argh::FromArgs;
 pub use derivative::Derivative;
-pub use failure::{bail, ensure, format_err, Error, Fallible};
 pub use futures::stream::{Stream, StreamExt, TryStreamExt};
 pub use image::{
     imageops::FilterType, io::Reader as ImageReader, DynamicImage, GenericImageView, ImageBuffer,

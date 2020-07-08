@@ -19,7 +19,7 @@ struct Args {
 }
 
 #[async_std::main]
-async fn main() -> Fallible<()> {
+async fn main() -> Result<()> {
     pretty_env_logger::init();
 
     // Set signal handler

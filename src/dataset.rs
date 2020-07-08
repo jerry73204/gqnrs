@@ -38,7 +38,7 @@ pub mod deepmind {
         P: AsRef<Path>,
         D: AsRef<[Device]>,
     {
-        pub async fn build(self) -> Fallible<Dataset> {
+        pub async fn build(self) -> Result<Dataset> {
             // verify config
             let DatasetInit {
                 frame_channels,
@@ -115,7 +115,7 @@ pub mod deepmind {
         pub fn train_stream(
             &self,
             initial_step: usize,
-        ) -> Fallible<impl Stream<Item = Fallible<GqnModelInput>> + Send> {
+        ) -> Result<impl Stream<Item = Result<GqnModelInput>> + Send> {
             let Dataset {
                 sequence_size,
                 frame_size,
@@ -132,67 +132,57 @@ pub mod deepmind {
             // sample records randomly
             let stream = futures::stream::try_unfold(
                 (dataset, OsRng::default()),
-                move |(mut dataset, mut rng)| {
-                    async move {
-                        let index = rng.gen_range(0, num_records);
-                        let example = dataset.get::<Example>(index).await?;
-                        Fallible::Ok(Some((example, (dataset, rng))))
-                    }
+                move |(mut dataset, mut rng)| async move {
+                    let index = rng.gen_range(0, num_records);
+                    let example = dataset.get::<Example>(index).await?;
+                    Result::Ok(Some((example, (dataset, rng))))
                 },
             )
-            .try_filter_map(|example_opt| async move { Fallible::Ok(example_opt) });
+            .try_filter_map(|example_opt| async move { Result::Ok(example_opt) });
 
             // convert example type
             let stream = stream.map_ok(|example| GqnExample::my_from(example));
 
             // decode image
-            let stream = stream.and_then(|in_example| {
-                async move {
-                    let out_example = async_std::task::spawn_blocking(|| {
-                        utils::decode_image_on_example(
-                            in_example,
-                            hashmap!("frames".into() => None),
-                        )
-                    })
-                    .await?;
-                    Fallible::Ok(out_example)
-                }
+            let stream = stream.and_then(|in_example| async move {
+                let out_example = async_std::task::spawn_blocking(|| {
+                    utils::decode_image_on_example(in_example, hashmap!("frames".into() => None))
+                })
+                .await?;
+                Result::Ok(out_example)
             });
 
             // preprocess and transform
-            let stream = stream.and_then(move |in_example| {
-                async move {
-                    let out_example = async_std::task::spawn_blocking(move || {
-                        preprocessor(in_example, sequence_size, frame_size)
-                    })
-                    .await?;
-                    Fallible::Ok(out_example)
-                }
+            let stream = stream.and_then(move |in_example| async move {
+                let out_example = async_std::task::spawn_blocking(move || {
+                    preprocessor(in_example, sequence_size, frame_size)
+                })
+                .await?;
+                Result::Ok(out_example)
             });
 
             // convert to tch tensors
-            let stream = stream.and_then(move |in_example| {
-                async move {
-                    let out_example = async_std::task::spawn_blocking(move || {
-                        convert_to_tensors(in_example, sequence_size, frame_size)
-                    })
-                    .await?;
-                    Fallible::Ok(out_example)
-                }
+            let stream = stream.and_then(move |in_example| async move {
+                let out_example = async_std::task::spawn_blocking(move || {
+                    convert_to_tensors(in_example, sequence_size, frame_size)
+                })
+                .await?;
+                Result::Ok(out_example)
             });
 
             // group into batches
-            let stream = stream.chunks(batch_size).then(move |batch_of_results| {
-                async move {
+            let stream = stream
+                .chunks(batch_size)
+                .then(move |batch_of_results| async move {
                     let batch: HashMap<String, Tensor> = batch_of_results
                         .into_iter()
-                        .collect::<Fallible<Vec<_>>>()?
+                        .collect::<Result<Vec<_>>>()?
                         .into_iter()
                         .flat_map(|example| example.into_iter())
                         .into_group_map()
                         .into_iter()
                         .map(|(name, features)| {
-                            ensure!(features.len() == batch_size);
+                            debug_assert_eq!(features.len(), batch_size);
                             let tensors = features
                                 .into_iter()
                                 .map(|feature| match feature {
@@ -203,10 +193,9 @@ pub mod deepmind {
                             let batch_tensor = Tensor::stack(&tensors, 0);
                             Ok((name, batch_tensor))
                         })
-                        .collect::<Fallible<_>>()?;
-                    Fallible::Ok(batch)
-                }
-            });
+                        .collect::<Result<_>>()?;
+                    Result::Ok(batch)
+                });
 
             // transform to model input type
             let stream = stream.scan(initial_step, move |step, result| {
@@ -231,14 +220,14 @@ pub mod deepmind {
                         query_params,
                         step: curr_step,
                     };
-                    Some(Fallible::Ok(input))
+                    Some(Result::Ok(input))
                 }
             });
 
             Ok(stream)
         }
 
-        pub fn test_stream(&self) -> Fallible<impl TryStream<Ok = GqnModelInput, Error = Error>> {
+        pub fn test_stream(&self) -> Result<impl TryStream<Ok = GqnModelInput, Error = Error>> {
             let Dataset {
                 sequence_size,
                 frame_size,
@@ -255,53 +244,45 @@ pub mod deepmind {
                 .err_into::<Error>();
 
             // decode image
-            let stream = stream.and_then(|in_example| {
-                async move {
-                    let out_example = async_std::task::spawn_blocking(|| {
-                        utils::decode_image_on_example(
-                            in_example,
-                            hashmap!("frames".into() => None),
-                        )
-                    })
-                    .await?;
-                    Fallible::Ok(out_example)
-                }
+            let stream = stream.and_then(|in_example| async move {
+                let out_example = async_std::task::spawn_blocking(|| {
+                    utils::decode_image_on_example(in_example, hashmap!("frames".into() => None))
+                })
+                .await?;
+                Result::Ok(out_example)
             });
 
             // preprocess and transform
-            let stream = stream.and_then(move |in_example| {
-                async move {
-                    let out_example = async_std::task::spawn_blocking(move || {
-                        preprocessor(in_example, sequence_size, frame_size)
-                    })
-                    .await?;
-                    Fallible::Ok(out_example)
-                }
+            let stream = stream.and_then(move |in_example| async move {
+                let out_example = async_std::task::spawn_blocking(move || {
+                    preprocessor(in_example, sequence_size, frame_size)
+                })
+                .await?;
+                Result::Ok(out_example)
             });
 
             // convert to tch tensors
-            let stream = stream.and_then(move |in_example| {
-                async move {
-                    let out_example = async_std::task::spawn_blocking(move || {
-                        convert_to_tensors(in_example, sequence_size, frame_size)
-                    })
-                    .await?;
-                    Fallible::Ok(out_example)
-                }
+            let stream = stream.and_then(move |in_example| async move {
+                let out_example = async_std::task::spawn_blocking(move || {
+                    convert_to_tensors(in_example, sequence_size, frame_size)
+                })
+                .await?;
+                Result::Ok(out_example)
             });
 
             // group into batches
-            let stream = stream.chunks(batch_size).then(move |batch_of_results| {
-                async move {
+            let stream = stream
+                .chunks(batch_size)
+                .then(move |batch_of_results| async move {
                     let batch: HashMap<String, Tensor> = batch_of_results
                         .into_iter()
-                        .collect::<Fallible<Vec<_>>>()?
+                        .collect::<Result<Vec<_>>>()?
                         .into_iter()
                         .flat_map(|example| example.into_iter())
                         .into_group_map()
                         .into_iter()
                         .map(|(name, features)| {
-                            ensure!(features.len() == batch_size);
+                            debug_assert_eq!(features.len(), batch_size);
                             let tensors = features
                                 .into_iter()
                                 .map(|feature| match feature {
@@ -312,10 +293,9 @@ pub mod deepmind {
                             let batch_tensor = Tensor::stack(&tensors, 0);
                             Ok((name, batch_tensor))
                         })
-                        .collect::<Fallible<_>>()?;
-                    Fallible::Ok(batch)
-                }
-            });
+                        .collect::<Result<_>>()?;
+                    Result::Ok(batch)
+                });
 
             // transform to model input type
             let stream = stream.map_ok(move |mut in_example| {
@@ -342,7 +322,7 @@ pub mod deepmind {
         mut example: GqnExample,
         sequence_size: usize,
         frame_size: usize,
-    ) -> Fallible<GqnExample> {
+    ) -> Result<GqnExample> {
         // extract features of interest
         let (_camera_key, cameras) = {
             let (key, value) = example.remove_entry("cameras").unwrap();
@@ -398,13 +378,11 @@ pub mod deepmind {
                 .into_iter()
                 .map(|frame| {
                     let rgb_frame = frame.into_rgb();
-                    ensure!(
-                        rgb_frame.height() as usize == frame_size
-                            && rgb_frame.width() as usize == frame_size
-                    );
+                    debug_assert_eq!(rgb_frame.height() as usize, frame_size);
+                    debug_assert_eq!(rgb_frame.width() as usize, frame_size);
                     Ok(rgb_frame)
                 })
-                .collect::<Fallible<Vec<_>>>()?;
+                .collect::<Result<Vec<_>>>()?;
 
             // take the last image
             let target_frame = context_frames.pop().unwrap();
@@ -425,7 +403,7 @@ pub mod deepmind {
         in_example: GqnExample,
         sequence_size: usize,
         frame_size: usize,
-    ) -> Fallible<GqnExample> {
+    ) -> Result<GqnExample> {
         let out_example = in_example
             .into_iter()
             .map(|(key, value)| {
@@ -436,7 +414,7 @@ pub mod deepmind {
                             (sequence_size - 1, NUM_CAMERA_PARAMS),
                             list.into_iter().flatten().collect::<Vec<_>>(),
                         )?;
-                        Tensor::try_from(array)?
+                        Tensor::try_from(array).map_err(|err| format_err!("{:?}", err))?
                     }
                     GqnFeature::RgbImage(image) => {
                         let array =
@@ -445,7 +423,7 @@ pub mod deepmind {
                                 .map(|component| *component as f32 / 255.0)
                                 .as_standard_layout()
                                 .to_owned();
-                        Tensor::try_from(array)?
+                        Tensor::try_from(array).map_err(|err| format_err!("{:?}", err))?
                     }
                     GqnFeature::RgbImageList(list) => {
                         let tensors = list
@@ -459,17 +437,18 @@ pub mod deepmind {
                                 .map(|component| *component as f32 / 255.0)
                                 .as_standard_layout()
                                 .to_owned();
-                                let tensor = Tensor::try_from(array)?;
+                                let tensor = Tensor::try_from(array)
+                                    .map_err(|err| format_err!("{:?}", err))?;
                                 Ok(tensor)
                             })
-                            .collect::<Fallible<Vec<_>>>()?;
+                            .collect::<Result<Vec<_>>>()?;
                         Tensor::stack(&tensors, 0)
                     }
                     _ => unreachable!(),
                 };
                 Ok((key, tensor.into()))
             })
-            .collect::<Fallible<GqnExample>>()?;
+            .collect::<Result<GqnExample>>()?;
 
         Ok(out_example)
     }

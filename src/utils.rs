@@ -6,7 +6,7 @@ use crate::{
 pub fn decode_image_on_example(
     example: GqnExample,
     feature_formats: HashMap<String, Option<ImageFormat>>,
-) -> Fallible<GqnExample> {
+) -> Result<GqnExample> {
     let new_example = example
         .into_iter()
         .map(|(name, feature)| {
@@ -26,16 +26,16 @@ pub fn decode_image_on_example(
                     let array = decode_image(&bytes, *format_opt)?;
                     Ok(array)
                 })
-                .collect::<Fallible<Vec<_>>>()?;
+                .collect::<Result<Vec<_>>>()?;
 
             Ok((name, GqnFeature::DynamicImageList(new_list)))
         })
-        .collect::<Fallible<GqnExample>>()?;
+        .collect::<Result<GqnExample>>()?;
 
     Ok(new_example)
 }
 
-fn decode_image(bytes: &[u8], format_opt: Option<ImageFormat>) -> Fallible<DynamicImage> {
+fn decode_image(bytes: &[u8], format_opt: Option<ImageFormat>) -> Result<DynamicImage> {
     let image_reader = format_opt
         .map(|format| {
             let reader = Cursor::new(bytes);

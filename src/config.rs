@@ -8,7 +8,7 @@ pub struct Config {
 }
 
 impl Config {
-    pub fn open<P>(path: P) -> Fallible<Self>
+    pub fn open<P>(path: P) -> Result<Self>
     where
         P: AsRef<Path>,
     {
@@ -151,7 +151,6 @@ mod deepmind_config {
         pub dataset_name: String,
         pub check_integrity: bool,
     }
-
 }
 
 fn default_devices() -> Vec<Device> {
