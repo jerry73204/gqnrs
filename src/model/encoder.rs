@@ -10,59 +10,119 @@ where
 {
     let path = path.borrow();
 
-    let conv_config = |padding, stride| nn::ConvConfig {
-        padding: padding,
-        stride: stride,
-        ..Default::default()
-    };
-
-    let conv1 = nn::conv2d(path / "conv1", 3, 256, 2, conv_config(0, 2));
-    let conv2 = nn::conv2d(path / "conv2", 256, 128, 1, conv_config(0, 1));
-    let conv3 = nn::conv2d(path / "conv3", 256, 128, 3, conv_config(1, 1));
-    let conv4 = nn::conv2d(path / "conv4", 128, 256, 2, conv_config(0, 2));
+    let conv1 = nn::conv2d(
+        path / "conv1",
+        3,
+        256,
+        2,
+        nn::ConvConfig {
+            padding: 0,
+            stride: 2,
+            ..Default::default()
+        },
+    );
+    let conv2 = nn::conv2d(
+        path / "conv2",
+        256,
+        128,
+        1,
+        nn::ConvConfig {
+            padding: 0,
+            stride: 1,
+            ..Default::default()
+        },
+    );
+    let conv3 = nn::conv2d(
+        path / "conv3",
+        256,
+        128,
+        3,
+        nn::ConvConfig {
+            padding: 1,
+            stride: 1,
+            ..Default::default()
+        },
+    );
+    let conv4 = nn::conv2d(
+        path / "conv4",
+        128,
+        256,
+        2,
+        nn::ConvConfig {
+            padding: 0,
+            stride: 2,
+            ..Default::default()
+        },
+    );
     let conv5 = nn::conv2d(
         path / "conv5",
         256 + param_channels,
         128,
         1,
-        conv_config(0, 1),
+        nn::ConvConfig {
+            padding: 0,
+            stride: 1,
+            ..Default::default()
+        },
     );
     let conv6 = nn::conv2d(
         path / "conv6",
         256 + param_channels,
         128,
         3,
-        conv_config(1, 1),
+        nn::ConvConfig {
+            padding: 1,
+            stride: 1,
+            ..Default::default()
+        },
     );
-    let conv7 = nn::conv2d(path / "conv7", 128, 256, 3, conv_config(1, 1));
-    let conv8 = nn::conv2d(path / "conv8", 256, repr_channels, 1, conv_config(0, 1));
+    let conv7 = nn::conv2d(
+        path / "conv7",
+        128,
+        256,
+        3,
+        nn::ConvConfig {
+            padding: 1,
+            stride: 1,
+            ..Default::default()
+        },
+    );
+    let conv8 = nn::conv2d(
+        path / "conv8",
+        256,
+        repr_channels,
+        1,
+        nn::ConvConfig {
+            padding: 0,
+            stride: 1,
+            ..Default::default()
+        },
+    );
 
     Box::new(move |frames, poses, _train| {
-        let mut net = frames.apply(&conv1);
-        let mut skip = net.apply(&conv2);
-        net = net.apply(&conv3);
-        net = net + skip;
+        let x1 = frames.apply(&conv1);
+        let x2 = x1.apply(&conv3);
+        let skip1 = x1.apply(&conv2);
+        let x3 = x2 + skip1;
 
-        net = net.apply(&conv4);
+        let x4 = x3.apply(&conv4);
 
-        let net_size = net.size();
-        let batch_size = net_size[0];
-        let broadcast_poses = poses.reshape(&[batch_size, param_channels, 1, 1]).repeat(&[
-            1,
-            1,
-            net_size[2],
-            net_size[3],
-        ]);
-        net = Tensor::cat(&[net, broadcast_poses], 1);
+        let broadcast_poses = {
+            let (b, _c, h, w) = x4.size4().unwrap();
+            poses
+                .reshape(&[b, param_channels, 1, 1])
+                .repeat(&[1, 1, h, w])
+        };
 
-        skip = net.apply(&conv5);
-        net = net.apply(&conv6);
-        net = net + skip;
+        let x5 = Tensor::cat(&[x4, broadcast_poses], 1);
+        let skip2 = x5.apply(&conv5);
+        let x6 = x5.apply(&conv6);
+        let x7 = x6 + skip2;
 
-        net = net.apply(&conv7);
-        net = net.apply(&conv8);
+        let x8 = x7.apply(&conv7);
+        let x9 = x8.apply(&conv8);
 
-        net
+        x9
     })
 }
 
@@ -78,19 +138,14 @@ where
     let tower_encoder = tower_encoder(path / "tower_encoder", repr_channels, param_channels);
 
     Box::new(move |frames, poses, train| {
-        let mut net = tower_encoder(frames, poses, train);
-        let net_size = net.size();
-        let batch_size = net_size[0];
-        let n_channels = net_size[1];
-        let height = net_size[2];
-        let width = net_size[3];
+        let tower_output = tower_encoder(frames, poses, train);
+        let (b, c, _h, _w) = tower_output.size4().unwrap();
 
         // reduce mean of height, width dimension
-        net = net
-            .view(&[batch_size, n_channels, height * width][..])
-            .mean1(&[2], false, Kind::Float)
-            .view(&[batch_size, n_channels, 1, 1][..]);
+        let encoder_output = tower_output
+            .mean1(&[2, 3], false, Kind::Float)
+            .view([b, c, 1, 1]);
 
-        net
+        encoder_output
     })
 }
