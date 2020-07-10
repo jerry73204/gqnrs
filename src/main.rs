@@ -165,11 +165,10 @@ async fn main() -> Result<()> {
             let mut download_rx = download_tx.subscribe();
 
             let vs = VarStore::new(device);
-            let model = {
+            let mut model = {
                 let root = vs.root();
                 let model =
                     GqnModelInit::new(frame_channels as i64, param_channels as i64).build(&root);
-                let _ = root.zeros("step", &[]);
                 model
             };
             let mut trainable_variables = vs.trainable_variables();
@@ -185,15 +184,18 @@ async fn main() -> Result<()> {
 
             async move {
                 while let Some(data_msg) = data_rx.recv().await {
-                    let DataMessage { step, input } = data_msg;
+                    let DataMessage { input, .. } = data_msg;
                     let input = input.to_device(device);
                     let output = model(&input, true);
 
                     // compute gradient
+                    let mean_target_mse = output.target_mse.mean(Kind::Float);
                     let mean_elbo_loss = output.elbo_loss.mean(Kind::Float);
+
                     info!(
-                        "worker: {},\tloss: {}",
+                        "worker: {},\tmse: {}\telbo_loss: {}",
                         worker_index,
+                        f32::from(&mean_target_mse),
                         f32::from(&mean_elbo_loss)
                     );
                     mean_elbo_loss.backward();

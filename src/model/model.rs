@@ -76,7 +76,10 @@ impl GqnModelInit {
         }
     }
 
-    pub fn build<'p, P>(self, path: P) -> Box<dyn Fn(&GqnModelInput, bool) -> GqnModelOutput + Send>
+    pub fn build<'p, P>(
+        self,
+        path: P,
+    ) -> Box<dyn FnMut(&GqnModelInput, bool) -> GqnModelOutput + Send>
     where
         P: Borrow<nn::Path<'p>>,
     {
@@ -96,6 +99,8 @@ impl GqnModelInit {
             eta_internal_kernel_size,
             eta_external_kernel_size,
         } = self;
+
+        let mut step_tensor = path.zeros("step", &[]);
 
         let encoder = match encoder_kind {
             GqnEncoderKind::Tower => {
@@ -128,10 +133,14 @@ impl GqnModelInit {
                     target_frame,
                     context_params,
                     query_params,
-                    step,
+                    ..
                 } = input;
-                // let target_frame = target_frame.set_requires_grad(false);
-                let step = *step;
+                let step = input.step;
+
+                // save recent step
+                tch::no_grad(|| {
+                    step_tensor.copy_(&Tensor::from(step as i64));
+                });
 
                 // get sizes
                 let (batch_size, seq_size, channels, height, width) =
