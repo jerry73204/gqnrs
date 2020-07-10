@@ -49,7 +49,7 @@ def main():
         target_mse_y.append(log.target_mse)
 
         # Uncomment this to plot histogram
-        # viz.histogram(X=log.stds_gen.view([-1]))
+        # viz.histogram(X=log.stds_target.view([-1]))
         # viz.images(log.means_target, opts=dict(title=log_name))
 
     # Plot ELBO loss and target MSE curve

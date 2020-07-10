@@ -9,7 +9,6 @@ pub fn log_ndtr_ext(x: &Tensor, series_order: i64) -> Tensor {
     //                 { -10,  x.dtype=float32
     // upper_segment = {   8,  x.dtype=float64
     //                 {   5,  x.dtype=float32
-
     let (lower_segment, upper_segment) = match x.kind() {
         Kind::Float => (Tensor::of_slice(&[-10_f32]), Tensor::of_slice(&[5_f32])),
         Kind::Double => (Tensor::of_slice(&[-20_f64]), Tensor::of_slice(&[8_f64])),
