@@ -30,9 +30,9 @@ pub fn ndtr(x: &Tensor) -> Tensor {
     let half_sqrt_2: Tensor = (0.5 * 2_f64.sqrt()).into();
     let w = x * &half_sqrt_2;
     let z = w.abs();
-    let y = (1. + w.erf()).where1(
+    let y = (w.erf() + 1.).where1(
         &z.lt1(&half_sqrt_2),
-        &(2. - z.erfc()).where1(&w.gt1(&w.zeros_like()), &z.erfc()),
+        &(-z.erfc() + 2.).where1(&w.gt1(&w.zeros_like()), &z.erfc()),
     );
     y * 0.5
 }
