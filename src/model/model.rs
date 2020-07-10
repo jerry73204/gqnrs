@@ -130,76 +130,61 @@ impl GqnModelInit {
                     query_params,
                     step,
                 } = input;
-                let target_frame = target_frame.set_requires_grad(false);
+                // let target_frame = target_frame.set_requires_grad(false);
                 let step = *step;
 
-                // Pack encoder input, melt batch and seq dimensions
-                let (batch_size, seq_size, channels, height, width) = {
-                    let context_frames_size = context_frames.size();
-                    let batch_size = context_frames_size[0];
-                    let seq_size = context_frames_size[1];
-                    let channels = context_frames_size[2];
-                    let height = context_frames_size[3];
-                    let width = context_frames_size[4];
-                    (batch_size, seq_size, channels, height, width)
-                };
-
+                // get sizes
+                let (batch_size, seq_size, channels, height, width) =
+                    match context_frames.size().as_slice() {
+                        &[b, s, c, h, w] => (b, s, c, h, w),
+                        _ => unreachable!(),
+                    };
                 let n_params = {
-                    let context_poses_size = context_params.size();
-                    let batch_size2 = context_poses_size[0];
-                    let seq_size2 = context_poses_size[1];
-                    let n_params = context_poses_size[2];
-                    assert!(batch_size == batch_size2 && seq_size == seq_size2);
-                    n_params
+                    let (b, s, n) = context_params.size3().unwrap();
+                    debug_assert_eq!(b, batch_size);
+                    debug_assert_eq!(s, seq_size);
+                    n
+                };
+                let (target_height, target_width) = {
+                    let (b, _c, h, w) = target_frame.size4().unwrap();
+                    debug_assert_eq!(b, batch_size);
+                    (h, w)
                 };
 
-                let packed_context_frames =
-                    context_frames.view(&[batch_size * seq_size, channels, height, width][..]);
-                let packed_context_poses =
-                    context_params.view(&[batch_size * seq_size, n_params][..]);
-                let packed_representation =
-                    encoder(&packed_context_frames, &packed_context_poses, train);
+                // run encoder
+                let (representation, repr_height, repr_width) = {
+                    let packed_context_frames =
+                        context_frames.view([batch_size * seq_size, channels, height, width]);
+                    let packed_context_poses =
+                        context_params.view([batch_size * seq_size, n_params]);
+                    let packed_representation =
+                        encoder(&packed_context_frames, &packed_context_poses, train);
 
-                let representation = {
-                    let size = packed_representation.size();
-                    let repr_channels = size[1];
-                    let repr_height = size[2];
-                    let repr_width = size[3];
-                    let stacked_repr = packed_representation
-                        .view(&[batch_size, seq_size, repr_channels, repr_height, repr_width][..]);
-                    let repr = stacked_repr.sum1(&[1], false, Kind::Float);
-                    repr
+                    let (_b, c, h, w) = packed_representation.size4().unwrap();
+                    let repr = packed_representation
+                        .view([batch_size, seq_size, c, h, w])
+                        .sum1(&[1], false, Kind::Float);
+                    (repr, h, w)
                 };
+                debug_assert_eq!(target_height, repr_height * 4);
+                debug_assert_eq!(target_width, repr_width * 4);
 
                 // Broadcast encoding
-                let broadcast_repr = {
-                    match encoder_kind {
-                        GqnEncoderKind::Tower => {
-                            let repr_size = representation.size();
-                            let repr_height = repr_size[2];
-                            let repr_width = repr_size[3];
-
-                            let target_size = target_frame.size();
-                            let target_height = target_size[2];
-                            let target_width = target_size[3];
-
-                            assert!(
-                                target_height == repr_height * 4 && target_width == repr_width * 4
-                            );
-                            representation
-                        }
-                        GqnEncoderKind::Pool => {
-                            let target_size = target_frame.size();
-                            let target_height = target_size[2];
-                            let target_width = target_size[3];
-                            let repr_height = target_height / 4;
-                            let repr_width = target_width / 4;
-
-                            representation.repeat(&[1, 1, repr_height, repr_width])
-                        }
+                let broadcast_repr = match encoder_kind {
+                    GqnEncoderKind::Tower => representation,
+                    GqnEncoderKind::Pool => {
+                        representation.repeat(&[1, 1, target_height / 4, target_width / 4])
                     }
                 };
 
+                {
+                    let (b, _c, h, w) = broadcast_repr.size4().unwrap();
+                    debug_assert_eq!(b, batch_size);
+                    debug_assert_eq!(h, repr_height);
+                    debug_assert_eq!(w, repr_width);
+                }
+
+                // run decoder
                 let GqnDecoderOutput {
                     target_mean,
                     decoder_states,
@@ -247,5 +232,5 @@ fn pixel_std_annealing(shape: &[i64], step: usize, device: Device) -> Tensor {
     let max_step = params::ANNEAL_SIGMA_MAX;
     let std = end + (begin - end) * (1.0 - step as f64 / max_step).max(0.0);
 
-    Tensor::zeros(shape, (Kind::Float, device)).fill_(std)
+    nn::init(nn::Init::Const(std), shape, device)
 }
