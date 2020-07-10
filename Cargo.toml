@@ -33,6 +33,12 @@ tokio = { version = "0.2", features = ["sync"] }
 static_assertions = "1.1"
 rand = "0.7"
 futures = "0.3"
+par-stream = { version = "0.1", git = "https://github.com/jerry73204/par-stream.git" }
+tch-tensor-like = { version = "0.1", git = "https://github.com/jerry73204/tch-tensor-like.git", features = ["derive"] }
 
 [dev-dependencies]
 rv = "0.10"
+
+[patch.crates-io]
+tch = { git = "https://github.com/LaurentMazare/tch-rs.git" }
+tfrecord = { git = "https://github.com/jerry73204/rust-tfrecord.git", branch = "tch-with-anyhow" }
