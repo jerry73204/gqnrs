@@ -2,26 +2,10 @@ use crate::common::*;
 
 // gqn lstm cell
 
-#[derive(Debug)]
+#[derive(Debug, TensorLike)]
 pub struct GqnLSTMState {
     pub h: Tensor,
     pub c: Tensor,
-}
-
-impl GqnLSTMState {
-    pub fn to_device(&self, device: Device) -> Self {
-        Self {
-            h: self.h.to_device(device),
-            c: self.c.to_device(device),
-        }
-    }
-
-    pub fn shallow_clone(&self) -> Self {
-        Self {
-            h: self.h.shallow_clone(),
-            c: self.c.shallow_clone(),
-        }
-    }
 }
 
 #[derive(Debug)]
@@ -383,41 +367,11 @@ impl GqnDecoderCell {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, TensorLike)]
 pub struct GqnDecoderCellState {
     pub inf_state: GqnLSTMState,
     pub gen_state: GqnLSTMState,
     pub canvas: Tensor,
-}
-
-impl GqnDecoderCellState {
-    pub fn to_device(&self, device: Device) -> Self {
-        let Self {
-            inf_state,
-            gen_state,
-            canvas,
-        } = self;
-
-        Self {
-            inf_state: inf_state.to_device(device),
-            gen_state: gen_state.to_device(device),
-            canvas: canvas.to_device(device),
-        }
-    }
-
-    pub fn shallow_clone(&self) -> Self {
-        let Self {
-            inf_state,
-            gen_state,
-            canvas,
-        } = self;
-
-        Self {
-            inf_state: inf_state.shallow_clone(),
-            gen_state: gen_state.shallow_clone(),
-            canvas: canvas.shallow_clone(),
-        }
-    }
 }
 
 // noise
@@ -467,31 +421,9 @@ impl GqnNoiseFactory {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, TensorLike)]
 pub struct GqnNoise {
     pub means: Tensor,
     pub stds: Tensor,
     pub noise: Tensor,
-}
-
-impl GqnNoise {
-    pub fn to_device(&self, device: Device) -> Self {
-        let Self { means, stds, noise } = self;
-
-        Self {
-            means: means.to_device(device),
-            stds: stds.to_device(device),
-            noise: noise.to_device(device),
-        }
-    }
-
-    pub fn shallow_clone(&self) -> Self {
-        let Self { means, stds, noise } = self;
-
-        Self {
-            means: means.shallow_clone(),
-            stds: stds.shallow_clone(),
-            noise: noise.shallow_clone(),
-        }
-    }
 }

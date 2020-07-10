@@ -39,5 +39,6 @@ pub use tch::{
     nn::{self, Adam, Conv2D, ConvConfig, Init, OptimizerConfig, VarStore},
     Device, Kind, Reduction, Tensor,
 };
+pub use tch_tensor_like::TensorLike;
 pub use tfrecord::{Example, Feature};
 pub use tokio::sync::{broadcast, mpsc, Semaphore};

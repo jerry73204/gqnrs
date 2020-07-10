@@ -12,7 +12,7 @@ use crate::{
 
 // input type
 
-#[derive(Debug)]
+#[derive(Debug, TensorLike)]
 pub struct GqnModelInput {
     pub context_frames: Tensor,
     pub target_frame: Tensor,
@@ -21,29 +21,9 @@ pub struct GqnModelInput {
     pub step: usize,
 }
 
-impl GqnModelInput {
-    pub fn to_device(&self, device: Device) -> Self {
-        let Self {
-            context_frames,
-            target_frame,
-            context_params,
-            query_params,
-            step,
-        } = self;
-
-        Self {
-            context_frames: context_frames.to_device(device),
-            target_frame: target_frame.to_device(device),
-            context_params: context_params.to_device(device),
-            query_params: query_params.to_device(device),
-            step: *step,
-        }
-    }
-}
-
 // output type
 
-#[derive(Debug)]
+#[derive(Debug, TensorLike)]
 pub struct GqnModelOutput {
     // losses
     pub elbo_loss: Tensor,
@@ -56,74 +36,6 @@ pub struct GqnModelOutput {
     pub decoder_states: Vec<GqnDecoderCellState>,
     pub inf_noises: Vec<GqnNoise>,
     pub gen_noises: Vec<GqnNoise>,
-}
-
-impl GqnModelOutput {
-    pub fn to_device(&self, device: Device) -> Self {
-        let Self {
-            elbo_loss,
-            target_mse,
-            target_sample,
-            target_mean,
-            target_std,
-            decoder_states,
-            inf_noises,
-            gen_noises,
-        } = self;
-
-        Self {
-            elbo_loss: elbo_loss.to_device(device),
-            target_mse: target_mse.to_device(device),
-            target_sample: target_sample.to_device(device),
-            target_mean: target_mean.to_device(device),
-            target_std: target_std.to_device(device),
-            decoder_states: decoder_states
-                .iter()
-                .map(|state| state.to_device(device))
-                .collect(),
-            inf_noises: inf_noises
-                .iter()
-                .map(|noise| noise.to_device(device))
-                .collect(),
-            gen_noises: gen_noises
-                .iter()
-                .map(|noise| noise.to_device(device))
-                .collect(),
-        }
-    }
-
-    pub fn shallow_clone(&self) -> Self {
-        let Self {
-            elbo_loss,
-            target_mse,
-            target_sample,
-            target_mean,
-            target_std,
-            decoder_states,
-            inf_noises,
-            gen_noises,
-        } = self;
-
-        Self {
-            elbo_loss: elbo_loss.shallow_clone(),
-            target_mse: target_mse.shallow_clone(),
-            target_sample: target_sample.shallow_clone(),
-            target_mean: target_mean.shallow_clone(),
-            target_std: target_std.shallow_clone(),
-            decoder_states: decoder_states
-                .iter()
-                .map(|state| state.shallow_clone())
-                .collect(),
-            inf_noises: inf_noises
-                .iter()
-                .map(|noise| noise.shallow_clone())
-                .collect(),
-            gen_noises: gen_noises
-                .iter()
-                .map(|noise| noise.shallow_clone())
-                .collect(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

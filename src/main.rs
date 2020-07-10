@@ -85,8 +85,19 @@ async fn main() -> Result<()> {
         grads: Vec<Tensor>,
     }
 
-    #[derive(Debug, Clone)]
-    struct DownloadMessage {}
+    #[derive(Debug)]
+    struct DownloadMessage {
+        weights: Vec<Tensor>,
+    }
+
+    impl Clone for DownloadMessage {
+        fn clone(&self) -> Self {
+            let Self { weights } = self;
+            Self {
+                weights: weights.shallow_clone(),
+            }
+        }
+    }
 
     #[derive(Debug)]
     struct DataMessage {
