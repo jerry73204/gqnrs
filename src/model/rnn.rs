@@ -3,13 +3,13 @@ use crate::common::*;
 // gqn lstm cell
 
 #[derive(Debug, TensorLike)]
-pub struct GqnLSTMState {
+pub struct GqnLstmState {
     pub h: Tensor,
     pub c: Tensor,
 }
 
 #[derive(Debug)]
-pub struct GqnLSTM {
+pub struct GqnLstm {
     biases: bool,
     conv_ih: Conv2D,
     conv_hh: Conv2D,
@@ -19,7 +19,7 @@ pub struct GqnLSTM {
     device: Device,
 }
 
-impl GqnLSTM {
+impl GqnLstm {
     pub fn new<'p, P>(
         path: P,
         biases: bool,
@@ -27,7 +27,7 @@ impl GqnLSTM {
         out_channels: i64,
         kernel_size: i64,
         forget_bias: f64,
-    ) -> GqnLSTM
+    ) -> GqnLstm
     where
         P: Borrow<nn::Path<'p>>,
     {
@@ -57,7 +57,7 @@ impl GqnLSTM {
         );
         let device = path.device();
 
-        GqnLSTM {
+        GqnLstm {
             biases,
             conv_ih,
             conv_hh,
@@ -68,33 +68,40 @@ impl GqnLSTM {
         }
     }
 
-    pub fn zero_state(&self, batch: i64, height: i64, width: i64) -> GqnLSTMState {
+    pub fn zero_state(&self, batch: i64, height: i64, width: i64) -> GqnLstmState {
         let hidden_size = [batch, self.out_channels, height, width];
 
         let h = Tensor::zeros(&hidden_size, (Kind::Float, self.device));
         let c = Tensor::zeros(&hidden_size, (Kind::Float, self.device));
 
-        GqnLSTMState { h, c }
+        GqnLstmState { h, c }
     }
 
-    pub fn step(&self, input: &Tensor, prev_state: &GqnLSTMState) -> GqnLSTMState {
-        let GqnLSTMState { h: hx, c: cx } = prev_state;
+    pub fn step(&self, input: &Tensor, prev_state: &GqnLstmState) -> GqnLstmState {
+        let Self {
+            ref conv_ih,
+            ref conv_hh,
+            out_channels,
+            forget_bias,
+            ..
+        } = *self;
+        let GqnLstmState { h: hx, c: cx } = prev_state;
 
-        let gates = input.apply(&self.conv_ih) + hx.apply(&self.conv_hh);
-        let mut in_gate = gates.narrow(1, 0 * self.out_channels, self.out_channels);
-        let mut forget_gate = gates.narrow(1, 1 * self.out_channels, self.out_channels);
-        let mut cell_gate = gates.narrow(1, 2 * self.out_channels, self.out_channels);
-        let mut out_gate = gates.narrow(1, 3 * self.out_channels, self.out_channels);
+        let gates = input.apply(conv_ih) + hx.apply(conv_hh);
+        let mut in_gate = gates.narrow(1, 0 * out_channels, out_channels);
+        let mut forget_gate = gates.narrow(1, 1 * out_channels, out_channels);
+        let mut cell_gate = gates.narrow(1, 2 * out_channels, out_channels);
+        let mut out_gate = gates.narrow(1, 3 * out_channels, out_channels);
 
         in_gate = in_gate.sigmoid();
-        forget_gate = forget_gate.sigmoid() + self.forget_bias;
+        forget_gate = forget_gate.sigmoid() + forget_bias;
         cell_gate = cell_gate.tanh();
         out_gate = out_gate.sigmoid();
 
         let cy = forget_gate * cx + in_gate * cell_gate;
         let hy = out_gate + cy.tanh();
 
-        GqnLSTMState { h: hy, c: cy }
+        GqnLstmState { h: hy, c: cy }
     }
 }
 
@@ -151,7 +158,7 @@ impl GqnDecoderCellInit {
         );
 
         // generator part
-        let gen_lstm = GqnLSTM::new(
+        let gen_lstm = GqnLstm::new(
             path / "generator_lstm",
             biases,
             gen_input_channels,
@@ -172,7 +179,7 @@ impl GqnDecoderCellInit {
         );
 
         // inference part
-        let inf_lstm = GqnLSTM::new(
+        let inf_lstm = GqnLstm::new(
             path / "inference_lstm",
             biases,
             inf_input_channels,
@@ -219,8 +226,8 @@ pub struct GqnDecoderCell {
     param_channels: i64,
     canvas_channels: i64,
     // modules
-    gen_lstm: GqnLSTM,
-    inf_lstm: GqnLSTM,
+    gen_lstm: GqnLstm,
+    inf_lstm: GqnLstm,
     canvas_conv: nn::Conv2D,
     canvas_dconv: nn::ConvTranspose2D,
     inf_noise_factory: GqnNoiseFactory,
@@ -237,27 +244,23 @@ impl GqnDecoderCell {
         train: bool,
     ) -> (GqnDecoderCellState, GqnNoise, GqnNoise) {
         // get sizes and sanity check
-        let (batch_size, target_height, target_width) = match target_frame.size().as_slice() {
-            &[batch_size, channels, height, width] => {
-                debug_assert_eq!(channels, self.target_channels);
-                (batch_size, height, width)
-            }
-            _ => unreachable!(),
+        let (batch_size, target_height, target_width) = {
+            let (b, c, h, w) = target_frame.size4().unwrap();
+            debug_assert_eq!(c, self.target_channels);
+            (b, h, w)
         };
-        let (repr_height, repr_width) = match representation.size().as_slice() {
-            &[batch_size_, channels, height, width] => {
-                debug_assert_eq!(batch_size, batch_size_);
-                debug_assert_eq!(channels, self.repr_channels);
-                (height, width)
-            }
-            _ => unreachable!(),
+
+        let (repr_height, repr_width) = {
+            let (b, c, h, w) = representation.size4().unwrap();
+            debug_assert_eq!(b, batch_size);
+            debug_assert_eq!(c, self.repr_channels);
+            (h, w)
         };
-        match query_poses.size().as_slice() {
-            &[batch_size_, channels] => {
-                debug_assert_eq!(batch_size, batch_size_);
-                debug_assert_eq!(channels, self.param_channels);
-            }
-            _ => unreachable!(),
+
+        {
+            let (b, c) = query_poses.size2().unwrap();
+            debug_assert_eq!(b, batch_size);
+            debug_assert_eq!(c, self.param_channels);
         }
 
         // prepare cell inputs
@@ -280,7 +283,7 @@ impl GqnDecoderCell {
                 Tensor::cat(&[representation, &broadcasted_poses, &prev_gen_state.h], 1);
             self.inf_lstm.step(
                 &inf_input,
-                &GqnLSTMState {
+                &GqnLstmState {
                     h: inf_h,
                     c: prev_inf_state.c.shallow_clone(),
                 },
@@ -331,16 +334,11 @@ impl GqnDecoderCell {
         target_frame: &Tensor,
         representation: &Tensor,
     ) -> GqnDecoderCellState {
-        let (batch_size, repr_height, repr_width) = match representation.size().as_slice() {
-            &[batch_size, _channels, height, width] => (batch_size, height, width),
-            _ => unreachable!(),
-        };
-        let (target_height, target_width) = match target_frame.size().as_slice() {
-            &[batch_size_, _channels, height, width] => {
-                debug_assert_eq!(batch_size, batch_size_);
-                (height, width)
-            }
-            _ => unreachable!(),
+        let (batch_size, _c, repr_height, repr_width) = representation.size4().unwrap();
+        let (target_height, target_width) = {
+            let (b, _c, h, w) = target_frame.size4().unwrap();
+            debug_assert_eq!(b, batch_size);
+            (h, w)
         };
 
         let inf_state = self
@@ -369,8 +367,8 @@ impl GqnDecoderCell {
 
 #[derive(Debug, TensorLike)]
 pub struct GqnDecoderCellState {
-    pub inf_state: GqnLSTMState,
-    pub gen_state: GqnLSTMState,
+    pub inf_state: GqnLstmState,
+    pub gen_state: GqnLstmState,
     pub canvas: Tensor,
 }
 

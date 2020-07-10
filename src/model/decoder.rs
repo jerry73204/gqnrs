@@ -95,27 +95,18 @@ impl GqnDecoder {
         train: bool,
     ) -> GqnDecoderOutput {
         // get batch size and sanity check
-        let batch_size = match representation.size().as_slice() {
-            &[batch_size, channels, _height, _width] => {
-                debug_assert_eq!(channels, self.repr_channels);
-                batch_size
-            }
-            _ => unreachable!(),
-        };
+        let (batch_size, repr_channels, _h, _w) = representation.size4().unwrap();
+        debug_assert_eq!(repr_channels, self.repr_channels);
 
-        match target_frame.size().as_slice() {
-            &[batch_size_, _channels, _height, _width] => {
-                debug_assert_eq!(batch_size, batch_size_);
-            }
-            _ => unreachable!(),
-        };
+        {
+            let (b, _c, _h, _w) = target_frame.size4().unwrap();
+            debug_assert_eq!(b, batch_size);
+        }
 
-        match query_poses.size().as_slice() {
-            &[batch_size_, param_channels] => {
-                debug_assert_eq!(batch_size_, batch_size);
-                debug_assert_eq!(param_channels, self.param_channels);
-            }
-            _ => unreachable!(),
+        {
+            let (b, n) = query_poses.size2().unwrap();
+            debug_assert_eq!(b, batch_size);
+            debug_assert_eq!(n, self.param_channels);
         }
 
         // pass thru decoder cells
