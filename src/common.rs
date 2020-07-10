@@ -11,6 +11,7 @@ pub use log::{debug, error, info, warn};
 pub use maplit::hashmap;
 pub use ndarray::{s, stack, Array2, Array3, ArrayBase, Axis};
 pub use par_map::ParMap;
+pub use par_stream::ParStreamExt;
 pub use rand::rngs::OsRng;
 pub use regex::Regex;
 pub use serde::{
