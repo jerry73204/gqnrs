@@ -77,7 +77,14 @@ async fn main() -> Result<()> {
 
     info!("dataset is ready");
 
-    // message types
+    // types
+    #[derive(Debug)]
+    struct MasterContext {
+        pub optimizer: nn::Optimizer<nn::Adam>,
+        pub upload_rx: mpsc::Receiver<UploadMessage>,
+        pub download_tx: broadcast::Sender<DownloadMessage>,
+    }
+
     #[derive(Debug)]
     struct UploadMessage {
         worker_index: usize,
@@ -153,38 +160,30 @@ async fn main() -> Result<()> {
         .map(|(worker_index, device)| {
             info!("starded training worker {}", worker_index);
             let is_master = worker_index == 0;
-            let mut is_master_grads_defined_opt = Some(false);
             let mut data_rx = data_rx_set.remove(&worker_index).unwrap();
             let mut upload_tx = upload_tx.clone();
-            let mut upload_rx_opt = if is_master {
-                Some(upload_rx_opt.take().unwrap())
-            } else {
-                None
-            };
-            let mut download_tx_opt = if is_master {
-                Some(download_tx.clone())
-            } else {
-                None
-            };
             let mut download_rx = download_tx.subscribe();
 
+            let vs = VarStore::new(device);
+            let model = {
+                let root = vs.root();
+                let model =
+                    GqnModelInit::new(frame_channels as i64, param_channels as i64).build(&root);
+                let _ = root.zeros("step", &[]);
+                model
+            };
+            let mut trainable_variables = vs.trainable_variables();
+            let mut master_context_opt = if is_master {
+                Some(MasterContext {
+                    optimizer: nn::Adam::default().build(&vs, 1e-3).unwrap(),
+                    upload_rx: upload_rx_opt.take().unwrap(),
+                    download_tx: download_tx.clone(),
+                })
+            } else {
+                None
+            };
+
             async move {
-                let vs = VarStore::new(device);
-                let model = {
-                    let root = vs.root();
-                    let model = GqnModelInit::new(frame_channels as i64, param_channels as i64)
-                        .build(&root);
-                    let _ = root.zeros("step", &[]);
-                    model
-                };
-                let mut optimizer_opt = if is_master {
-                    Some(nn::Adam::default().build(&vs, 1e-3).unwrap())
-                } else {
-                    None
-                };
-
-                let mut trainable_variables = vs.trainable_variables();
-
                 while let Some(data_msg) = data_rx.recv().await {
                     let DataMessage { step, input } = data_msg;
                     let input = input.to_device(device);
@@ -192,10 +191,16 @@ async fn main() -> Result<()> {
 
                     // compute gradient
                     let mean_elbo_loss = output.elbo_loss.mean(Kind::Float);
-                    let grads =
-                        Tensor::run_backward(&[&mean_elbo_loss], &trainable_variables, true, false)
-                            .into_iter()
-                            .collect::<Vec<_>>();
+                    info!(
+                        "worker: {},\tloss: {}",
+                        worker_index,
+                        f32::from(&mean_elbo_loss)
+                    );
+                    mean_elbo_loss.backward();
+                    let grads = trainable_variables
+                        .iter()
+                        .map(|tensor| tensor.grad())
+                        .collect::<Vec<_>>();
 
                     // upload to master
                     {
@@ -211,10 +216,11 @@ async fn main() -> Result<()> {
 
                     // process outcomes in master
                     if is_master {
-                        let is_master_grads_defined = is_master_grads_defined_opt.as_mut().unwrap();
-                        let optimizer = optimizer_opt.as_mut().unwrap();
-                        let upload_rx = upload_rx_opt.as_mut().unwrap();
-                        let download_tx = download_tx_opt.as_mut().unwrap();
+                        let MasterContext {
+                            optimizer,
+                            upload_rx,
+                            download_tx,
+                        } = master_context_opt.as_mut().unwrap();
 
                         let upload_msgs = {
                             let mut upload_msgs = vec![];
@@ -224,48 +230,47 @@ async fn main() -> Result<()> {
                             upload_msgs
                         };
 
-                        // compute mean gradients
-                        let mean_grads = {
-                            let num_msgs = upload_msgs.len();
-                            let num_grads = upload_msgs[0].grads.len();
+                        tch::no_grad(|| {
+                            // compute mean gradients
+                            let mean_grads = {
+                                let num_msgs = upload_msgs.len();
+                                let num_grads = upload_msgs[0].grads.len();
 
-                            (0..num_grads)
-                                .map(|grad_index| {
-                                    let is_defined = &upload_msgs[0].grads[grad_index].defined();
-                                    if !is_defined {
-                                        return None;
-                                    }
+                                (0..num_grads)
+                                    .map(|grad_index| {
+                                        let is_defined =
+                                            &upload_msgs[0].grads[grad_index].defined();
+                                        if !is_defined {
+                                            return None;
+                                        }
 
-                                    let mean_grad = (0..num_msgs)
-                                        .map(|msg_index| {
-                                            upload_msgs[msg_index].grads[grad_index].shallow_clone()
-                                        })
-                                        .fold1(|lhs, rhs| {
-                                            lhs.to_device(device) + rhs.to_device(device)
-                                        })
-                                        .unwrap()
-                                        / num_msgs as f64;
+                                        let mean_grad = (0..num_msgs)
+                                            .map(|msg_index| {
+                                                upload_msgs[msg_index].grads[grad_index]
+                                                    .shallow_clone()
+                                            })
+                                            .fold1(|lhs, rhs| {
+                                                lhs.to_device(device) + rhs.to_device(device)
+                                            })
+                                            .unwrap()
+                                            / num_msgs as f64;
 
-                                    Some(mean_grad)
+                                        Some(mean_grad)
+                                    })
+                                    .collect::<Vec<_>>()
+                            };
+
+                            // assign mean gradients to gradient tensors
+                            trainable_variables
+                                .iter()
+                                .zip_eq(mean_grads.iter())
+                                .filter_map(|(var, grad_opt)| {
+                                    grad_opt.as_ref().map(|grad| (var, grad))
                                 })
-                                .collect::<Vec<_>>()
-                        };
-
-                        // make gradient tensors defined
-                        if !*is_master_grads_defined {
-                            mean_elbo_loss.backward();
-                            *is_master_grads_defined = true;
-                        }
-
-                        // assign mean gradients to gradient tensors
-                        trainable_variables
-                            .iter()
-                            .zip_eq(mean_grads.iter())
-                            .filter_map(|(var, grad_opt)| grad_opt.as_ref().map(|grad| (var, grad)))
-                            .for_each(|(var, grad)| {
-                                var.grad().copy_(&grad);
-                            });
-
+                                .for_each(|(var, grad)| {
+                                    var.grad().copy_(&grad);
+                                });
+                        });
                         // optimization step
                         optimizer.step();
 
