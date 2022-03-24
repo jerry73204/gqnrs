@@ -2,7 +2,7 @@
 name = "gqnrs"
 version = "0.1.0"
 authors = ["jerry73204 <jerry73204@gmail.com>"]
-edition = "2018"
+edition = "2021"
 
 [dependencies]
 tch = "0.6.1"
