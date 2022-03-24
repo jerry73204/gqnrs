@@ -1,0 +1,4 @@
+[toolchain]
+channel = "stable"
+components = ["rust-docs", "rustfmt", "clippy"]
+profile = "default"
