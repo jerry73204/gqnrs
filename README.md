@@ -10,28 +10,39 @@ I take [tf-gqn](https://github.com/ogroth/tf-gqn) as reference implementation, a
 
 The program requires CUDA 9.0 and libtorch to work.
 
-- Rust 2018 edition
+- Rust 2021 edition
 
   Install Rust package on your OS/distribution through package manager or something else. I would recommend [rustup](https://rustup.rs/).
 
-- libtorch
+- PyTorch 1.10.2
 
-  Visit [PyTorch site](https://pytorch.org/) or click this [direct link](https://download.pytorch.org/libtorch/cu90/libtorch-shared-with-deps-latest.zip) to download libtorch binary pacakge.
+  Install PyTorch using `pip` if you're using Ubuntu 20.04.
 
-- CUDA 9.0
+  ```sh
+  pip3 install torch==1.10.2+cu113 -f https://download.pytorch.org/whl/torch_stable.html
+  ```
 
-  Visit NVIDIA CUDA Toolkit 9.0 [download page](https://developer.nvidia.com/cuda-90-download-archive) and install CUDA.
+- CUDA 11.5
+
+  Visit NVIDIA [CUDA Archive page](https://developer.nvidia.com/cuda-toolkit-archive). Click and install CUDA 11.5.2.
 
 
 
 ### Compile
 
-This is example invocation to build gqnrs executable. We assume unzipped libtorch at `/path/to/libtorch`, and CUDA 9.0 library path `/usr/local/cuda-9.0/lib64`.
+Supposed that you are using Ubuntu 20.04, set the following environment variables.
 
 ```sh
-env LIBTORCH=/path/to/libtorch \
-    LD_LIBRARY_PATH=/usr/local/cuda-9.0/lib64:/path/to/libtorch/lib \
-    cargo build --release
+export LD_LIBRARY_PATH="$HOME/.local/lib/python3.8/site-packages/torch/lib:$LD_LIBRARY_PATH"
+export LIBTORCH="$HOME/.local/lib/python3.8/site-packages/torch"
+export LIBTORCH_CXX11_ABI=0
+export RUST_LOG=info
+```
+
+To build the project,
+
+```sh
+cargo build --release
 ```
 
 ## Dataset
@@ -45,9 +56,7 @@ Obtain [gqn-dataset](https://github.com/deepmind/gqn-datasets). The overall data
 Suppose we want to train on `rooms_free_camera_with_object_rotations` dataset, located at `/path/to/gqn-dataset/rooms_free_camera_with_object_rotations`. We save the model file `model.zip` during training.
 
 ```sh
-env LD_LIBRARY_PATH=/usr/local/cuda-9.0/lib64:/path/to/libtorch/lib \
-    RUST_LOG=info \
-    cargo run --release -- \
+cargo run --release -- \
                         -n rooms_free_camera_with_object_rotations \
                         -i /path/to/gqn-dataset/rooms_free_camera_with_object_rotations \
                         --model-file model.zip
@@ -63,9 +72,7 @@ The program provides several advanced features, including
 
 
 ```sh
-env LD_LIBRARY_PATH=/usr/local/cuda-9.0/lib64:/path/to/libtorch/lib \
-    RUST_LOG=info \
-    cargo run --release -- \
+cargo run --release -- \
                         -n rooms_free_camera_with_object_rotations \
                         -i /path/to/gqn-dataset/rooms_free_camera_with_object_rotations \
                         --model-file model.zip \
