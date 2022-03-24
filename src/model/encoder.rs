@@ -143,7 +143,7 @@ where
 
         // reduce mean of height, width dimension
         let encoder_output = tower_output
-            .mean1(&[2, 3], false, Kind::Float)
+            .mean_dim(&[2, 3], false, Kind::Float)
             .view([b, c, 1, 1]);
 
         encoder_output

@@ -1,3 +1,5 @@
+use tfrecord::protobuf::{BytesList, FloatList, Int64List};
+
 use crate::common::*;
 
 pub type GqnExample = HashMap<String, GqnFeature>;
@@ -19,11 +21,13 @@ pub enum GqnFeature {
 
 impl From<Feature> for GqnFeature {
     fn from(from: Feature) -> Self {
-        match from {
-            Feature::BytesList(list) => Self::BytesList(list),
-            Feature::FloatList(list) => Self::FloatList(list),
-            Feature::Int64List(list) => Self::Int64List(list),
-            Feature::None => Self::None,
+        use tfrecord::protobuf::feature::Kind as K;
+
+        match from.kind {
+            Some(K::BytesList(BytesList { value })) => Self::BytesList(value),
+            Some(K::FloatList(FloatList { value })) => Self::FloatList(value),
+            Some(K::Int64List(Int64List { value })) => Self::Int64List(value),
+            None => Self::None,
         }
     }
 }

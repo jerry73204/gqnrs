@@ -17,7 +17,7 @@ where
 {
     let target_llh = -Normal::new(target_mean, target_std)
         .log_prob(target_frame)
-        .sum1(&[1, 2, 3], false, Kind::Float);
+        .sum_dim_intlist(&[1, 2, 3], false, Kind::Float);
 
     let kl_regularizer = {
         let kl_div_sum = inf_noises
@@ -30,16 +30,13 @@ where
                 let inf_normal = Normal::new(&inf_noise.means, &inf_noise.stds);
                 let gen_normal = Normal::new(&gen_noise.means, &gen_noise.stds);
 
-                let kl_div = inf_normal.kl_div(&gen_normal);
-                kl_div
+                inf_normal.kl_div(&gen_normal)
             })
-            .fold1(|lhs, rhs| lhs + rhs)
+            .reduce(|lhs, rhs| lhs + rhs)
             .unwrap();
-        let kl_regularizer = kl_div_sum.sum1(&[1, 2, 3], false, Kind::Float);
-        kl_regularizer
+
+        kl_div_sum.sum_dim_intlist(&[1, 2, 3], false, Kind::Float)
     };
 
-    let elbo_loss = target_llh + kl_regularizer;
-
-    elbo_loss
+    target_llh + kl_regularizer
 }

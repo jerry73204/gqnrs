@@ -80,7 +80,7 @@ async fn main() -> Result<()> {
     // types
     #[derive(Debug)]
     struct MasterContext {
-        pub optimizer: nn::Optimizer<nn::Adam>,
+        pub optimizer: nn::Optimizer,
         pub upload_rx: mpsc::Receiver<UploadMessage>,
         pub download_tx: broadcast::Sender<DownloadMessage>,
     }
@@ -135,7 +135,7 @@ async fn main() -> Result<()> {
                 let chunk = chunk_of_results.into_iter().collect::<Result<Vec<_>>>()?;
                 Ok(chunk)
             })
-            .overflowing_enumerate();
+            .enumerate();
 
         while let Some((step, result)) = train_stream.next().await {
             let inputs = result?;
@@ -161,7 +161,7 @@ async fn main() -> Result<()> {
             info!("starded training worker {}", worker_index);
             let is_master = worker_index == 0;
             let mut data_rx = data_rx_set.remove(&worker_index).unwrap();
-            let mut upload_tx = upload_tx.clone();
+            let upload_tx = upload_tx.clone();
             let mut download_rx = download_tx.subscribe();
 
             let vs = VarStore::new(device);
@@ -251,7 +251,7 @@ async fn main() -> Result<()> {
                                                 upload_msgs[msg_index].grads[grad_index]
                                                     .shallow_clone()
                                             })
-                                            .fold1(|lhs, rhs| {
+                                            .reduce(|lhs, rhs| {
                                                 lhs.to_device(device) + rhs.to_device(device)
                                             })
                                             .unwrap()

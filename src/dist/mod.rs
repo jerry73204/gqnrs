@@ -34,7 +34,7 @@ impl Normal {
     }
 
     fn log_unnormalized_prob(&self, x: &Tensor) -> Tensor {
-        -0.5 * self.z(x).pow(2)
+        self.z(x).pow_tensor_scalar(2) * (-0.5)
     }
 
     fn log_normalization(&self) -> Tensor {
@@ -49,7 +49,7 @@ impl Rv for Normal {
                 self.mean.size().as_slice(),
                 (Kind::Float, self.mean.device()),
             );
-            Tensor::normal_out2(&out, &self.mean, &self.std)
+            Tensor::normal_tensor_tensor_out(&out, &self.mean, &self.std)
         })
     }
 
@@ -73,11 +73,12 @@ impl Rv for Normal {
 
 impl KLDiv<Normal> for Normal {
     fn kl_div(&self, other: &Normal) -> Tensor {
-        let var_a = self.std.pow(2);
-        let var_b = other.std.pow(2);
+        let var_a = self.std.pow_tensor_scalar(2);
+        let var_b = other.std.pow_tensor_scalar(2);
         let ratio = &var_a / &var_b;
 
-        (&self.mean - &other.mean).pow(2) / (2. * var_b) + 0.5 * (&ratio - 1 - ratio.log())
+        (&self.mean - &other.mean).pow_tensor_scalar(2) / (2. * var_b)
+            + 0.5 * (&ratio - 1 - ratio.log())
     }
 }
 

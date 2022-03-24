@@ -16,12 +16,12 @@ pub fn log_ndtr_ext(x: &Tensor, series_order: i64) -> Tensor {
     };
 
     let above_upper = -ndtr(&-x); // log(1-x) ~= -x, x << 1
-    let between = ndtr(&x.max1(&lower_segment)).log();
-    let below_lower = log_ndtr_lower(&x.min1(&lower_segment), series_order);
+    let between = ndtr(&x.max_other(&lower_segment)).log();
+    let below_lower = log_ndtr_lower(&x.min_other(&lower_segment), series_order);
 
-    above_upper.where1(
-        &x.gt1(&upper_segment),
-        &between.where1(&x.gt1(&lower_segment), &below_lower),
+    above_upper.where_self(
+        &x.gt_tensor(&upper_segment),
+        &between.where_self(&x.gt_tensor(&lower_segment), &below_lower),
     )
 }
 
@@ -29,25 +29,25 @@ pub fn ndtr(x: &Tensor) -> Tensor {
     let half_sqrt_2: Tensor = (0.5 * 2_f64.sqrt()).into();
     let w = x * &half_sqrt_2;
     let z = w.abs();
-    let y = (w.erf() + 1.).where1(
-        &z.lt1(&half_sqrt_2),
-        &(-z.erfc() + 2.).where1(&w.gt1(&w.zeros_like()), &z.erfc()),
+    let y = (w.erf() + 1.).where_self(
+        &z.lt_tensor(&half_sqrt_2),
+        &(-z.erfc() + 2.).where_self(&w.gt_tensor(&w.zeros_like()), &z.erfc()),
     );
     y * 0.5
 }
 
 pub fn log_ndtr_lower(x: &Tensor, series_order: i64) -> Tensor {
-    let x_2 = x.pow(2);
+    let x_2 = x.pow_tensor_scalar(2);
     let log_scale = -0.5 * x_2 - (-x).log() - 0.5 * (2. * std::f64::consts::PI).ln();
     log_scale + log_ndtr_asymptotic_series(x, series_order).log()
 }
 
 pub fn log_ndtr_asymptotic_series(x: &Tensor, series_order: i64) -> Tensor {
     if series_order <= 0 {
-        return (1.0).into();
+        return Tensor::ones(&[], (Kind::Float, x.device()));
     }
 
-    let x_2 = x.pow(2);
+    let x_2 = x.pow_tensor_scalar(2);
     let mut evem_sum = x.zeros_like();
     let mut odd_sum = x.zeros_like();
     let mut x_2n = x_2.copy();

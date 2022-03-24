@@ -1,7 +1,7 @@
 pub use anyhow::{bail, ensure, format_err, Error, Result};
 pub use argh::FromArgs;
 pub use derivative::Derivative;
-pub use futures::stream::{Stream, StreamExt, TryStreamExt};
+pub use futures::stream::{self, Stream, StreamExt as _, TryStreamExt as _};
 pub use image::{
     imageops::FilterType, io::Reader as ImageReader, DynamicImage, GenericImageView, ImageBuffer,
     ImageFormat, Rgb, RgbImage,

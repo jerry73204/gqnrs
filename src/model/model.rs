@@ -172,7 +172,7 @@ impl GqnModelInit {
                     let (_b, c, h, w) = packed_representation.size4().unwrap();
                     let repr = packed_representation
                         .view([batch_size, seq_size, c, h, w])
-                        .sum1(&[1], false, Kind::Float);
+                        .sum_dim_intlist(&[1], false, Kind::Float);
                     (repr, h, w)
                 };
                 debug_assert_eq!(target_height, repr_height * 4);

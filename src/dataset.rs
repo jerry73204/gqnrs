@@ -67,29 +67,29 @@ pub mod deepmind {
                 .map(|p| p.unwrap())
                 .collect();
 
-            // build tfrecord dataset
-            let train_dataset = tfrecord::DatasetInit {
-                check_integrity,
-                ..Default::default()
-            }
-            .from_paths(&train_files)
+            // load tfrecord records
+            let train_records: Vec<_> = tfrecord::indexer::load_paths_async(
+                &train_files,
+                tfrecord::indexer::RecordIndexerConfig { check_integrity },
+            )
+            .try_collect()
             .await?;
-            let test_dataset = tfrecord::DatasetInit {
-                check_integrity,
-                ..Default::default()
-            }
-            .from_paths(&test_files)
+            let test_records: Vec<_> = tfrecord::indexer::load_paths_async(
+                &test_files,
+                tfrecord::indexer::RecordIndexerConfig { check_integrity },
+            )
+            .try_collect()
             .await?;
 
             let dataset = Dataset {
                 train_size: train_size.get(),
                 test_size: test_size.get(),
-                frame_size: frame_size,
+                frame_size,
                 sequence_size: sequence_size.get(),
                 frame_channels: frame_channels.get(),
                 batch_size: batch_size.get(),
-                train_dataset,
-                test_dataset,
+                train_records,
+                test_records,
             };
 
             Ok(dataset)
@@ -104,38 +104,33 @@ pub mod deepmind {
         sequence_size: usize,
         frame_channels: usize,
         batch_size: usize,
-        train_dataset: tfrecord::Dataset,
-        test_dataset: tfrecord::Dataset,
+        train_records: Vec<tfrecord::indexer::RecordIndex>,
+        test_records: Vec<tfrecord::indexer::RecordIndex>,
     }
 
     impl Dataset {
         pub fn train_stream(
             &self,
             initial_step: usize,
-        ) -> Result<impl Stream<Item = Result<GqnModelInput>> + Send> {
+        ) -> Result<impl Stream<Item = Result<GqnModelInput>> + Send + '_> {
             let Dataset {
                 sequence_size,
                 frame_size,
                 batch_size,
-                train_dataset: dataset,
+                ref train_records,
                 ..
-            } = self.clone();
+            } = *self;
 
-            let num_records = dataset.num_records();
-            if num_records == 0 {
+            if train_records.is_empty() {
                 bail!("dataset is empty");
             }
 
             // sample records randomly
-            let stream = futures::stream::try_unfold(
-                (dataset, OsRng::default()),
-                move |(mut dataset, mut rng)| async move {
-                    let index = rng.gen_range(0, num_records);
-                    let example = dataset.get::<Example>(index).await?;
-                    Result::Ok(Some((example, (dataset, rng))))
-                },
-            )
-            .try_filter_map(|example_opt| async move { Result::Ok(example_opt) });
+            let stream = futures::stream::try_unfold((), move |()| async move {
+                let index = OsRng.gen_range(0..train_records.len());
+                let example: Example = train_records[index].load_async().await?;
+                anyhow::Ok(Some((example, ())))
+            });
 
             // convert example type
             let stream = stream.map_ok(|example| GqnExample::my_from(example));
@@ -224,16 +219,21 @@ pub mod deepmind {
             Ok(stream)
         }
 
-        pub fn test_stream(&self) -> Result<impl TryStream<Ok = GqnModelInput, Error = Error>> {
+        pub fn test_stream(
+            &self,
+        ) -> Result<impl TryStream<Ok = GqnModelInput, Error = Error> + '_> {
             let Dataset {
                 sequence_size,
                 frame_size,
                 batch_size,
-                test_dataset: dataset,
+                ref test_records,
                 ..
-            } = self.clone();
+            } = *self;
 
-            let stream = dataset.stream::<Example>();
+            let stream = stream::iter(test_records).then(|record| async move {
+                let example: Example = record.load_async().await?;
+                anyhow::Ok(example)
+            });
 
             // convert example type
             let stream = stream
@@ -374,7 +374,7 @@ pub mod deepmind {
             let mut context_frames = frames
                 .into_iter()
                 .map(|frame| {
-                    let rgb_frame = frame.into_rgb();
+                    let rgb_frame = frame.into_rgb8();
                     debug_assert_eq!(rgb_frame.height() as usize, frame_size);
                     debug_assert_eq!(rgb_frame.width() as usize, frame_size);
                     Ok(rgb_frame)
